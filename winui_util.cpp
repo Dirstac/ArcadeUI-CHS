@@ -1,0 +1,1130 @@
+// license:BSD-3-Clause
+// For licensing and usage information, read docs/release/winui_license.txt
+// IPS 实现代码由 eziochiu 添加
+
+#include "winui.h" 
+//缘来是你
+/** eziochiu 添加 IPS ****/
+#include <map>
+#include <algorithm>
+#include <cctype>
+/************************/
+
+/***************************************************************************
+    Internal structures
+ ***************************************************************************/
+struct DriversInfo
+{
+	int screenCount;
+	bool isClone;
+	bool isBroken;
+	bool isHarddisk;
+	bool hasOptionalBIOS;
+	bool isVector;
+	bool usesRoms;
+	bool usesSamples;
+	bool usesTrackball;
+	bool usesLightGun;
+	bool supportsSaveState;
+	bool isVertical;
+	bool isImperfect;
+	bool isMechanical;
+	bool isBIOS;
+};
+
+static std::vector<DriversInfo>	drivers_info;
+
+enum
+{
+	DRIVER_CACHE_SCREEN     = 0x000F,
+	DRIVER_CACHE_ROMS       = 0x0010,
+	DRIVER_CACHE_CLONE      = 0x0020,
+	DRIVER_CACHE_BIOS       = 0x0040,
+	DRIVER_CACHE_HARDDISK   = 0x0080,
+	DRIVER_CACHE_SAMPLES    = 0x0100,
+	DRIVER_CACHE_VECTOR     = 0x0200,
+	DRIVER_CACHE_LIGHTGUN   = 0x0400,
+	DRIVER_CACHE_TRACKBALL  = 0x0800,
+};
+
+void ErrorMessageBox(const char *fmt, ...)
+{
+	char buf[1024];
+	va_list ptr;
+
+	va_start(ptr, fmt);
+	vsnprintf(buf, std::size(buf), fmt, ptr);
+	winui_message_box_utf8(GetMainWindow(), buf, MAMEUINAME, MB_ICONERROR | MB_OK);
+	va_end(ptr);
+}
+
+/* for debugging */
+void dprintf(const char *fmt, ...)
+{
+	char buf[1024];
+	va_list ptr;
+	va_start(ptr, fmt);
+	vsnprintf(buf, std::size(buf), fmt, ptr);
+	winui_output_debug_string_utf8(buf);
+	va_end(ptr);
+}
+
+void ShellExecuteCommon(HWND hWnd, const char *cName)
+{
+	const char *msg = NULL;
+	wchar_t *tName = win_wstring_from_utf8(cName);
+
+	if(!tName)
+		return;
+
+	HINSTANCE hErr = ShellExecute(hWnd, NULL, tName, NULL, NULL, SW_SHOWNORMAL);
+
+	if ((uintptr_t)hErr > 32)
+	{
+		free(tName);
+		return;
+	}
+
+	switch((uintptr_t)hErr)
+	{
+	case 0:
+		msg = "操作系统内存或资源不足。";
+		break;
+
+	case ERROR_FILE_NOT_FOUND:
+		msg = "找不到指定文件。";
+		break;
+
+	case SE_ERR_NOASSOC :
+		msg = "没有与给定文件扩展名关联的应用程序。";
+		break;
+
+	case SE_ERR_OOM :
+		msg = "没有足够的内存来完成操作。";
+		break;
+
+	case SE_ERR_PNF :
+		msg = "找不到指定的路径。";
+		break;
+
+	case SE_ERR_SHARE :
+		msg = "发生了共享冲突。";
+		break;
+
+	default:
+		msg = "未知错误。";
+	}
+
+	ErrorMessageBox("%s\r\n路径: '%s'", msg, cName);
+	free(tName);
+}
+
+char * MyStrStrI(const char* pFirst, const char* pSrch)
+{
+	char *cp = (char*)pFirst;
+
+	while (*cp)
+	{
+		char *s1 = cp;
+		char *s2 = (char*)pSrch;
+
+		while (*s1 && *s2 && !core_strnicmp(s1, s2, 1))
+			s1++, s2++;
+
+		if (!*s2)
+			return cp;
+
+		cp++;
+	}
+
+	return NULL;
+}
+
+char * ConvertToWindowsNewlines(const char *source)
+{
+	static char buf[2048 * 2048];
+
+	memset(&buf, 0, sizeof(buf));
+	char *dest = buf;
+
+	while (*source != 0)
+	{
+		if (*source == '\n')
+		{
+			*dest++ = '\r';
+			*dest++ = '\n';
+		}
+		else
+			*dest++ = *source;
+
+		source++;
+	}
+
+	*dest = 0;
+	return buf;
+}
+
+const char * GetDriverGameTitle(int nIndex)
+{
+	return driver_list::driver(nIndex).type.fullname();
+}
+
+const char * GetDriverGameName(int nIndex)
+{
+	return driver_list::driver(nIndex).name;
+}
+
+const char * GetDriverGameManufacturer(int nIndex)
+{
+	return driver_list::driver(nIndex).manufacturer;
+}
+
+const char * GetDriverGameYear(int nIndex)
+{
+	return driver_list::driver(nIndex).year;
+}
+
+const char * GetDriverFileName(int nIndex)
+{
+	static char tmp[64];
+
+	std::string driver = std::string(core_filename_extract_base(driver_list::driver(nIndex).type.source(), false));
+	strcpy(tmp, driver.c_str());
+	return tmp;
+}
+
+int GetGameNameIndex(const char *name)
+{
+	return driver_list::find(name);
+}
+
+static int NumberOfScreens(const machine_config &config)
+{
+	screen_device_enumerator scriter(config.root_device());
+	return scriter.count();
+}
+
+static bool isDriverVector(const machine_config &config)
+{
+	const screen_device *screen = screen_device_enumerator(config.root_device()).first();
+
+	if (screen != nullptr) 
+	{
+		if (SCREEN_TYPE_VECTOR == screen->screen_type())
+			return true;
+	}
+
+	return false;
+}
+
+static void SetDriversInfo(void)
+{
+	uint32_t cache;
+	int total = driver_list::total();
+	struct DriversInfo *gameinfo = NULL;
+
+	for (int ndriver = 0; ndriver < total; ndriver++)
+	{
+		gameinfo = &drivers_info[ndriver];
+		cache = gameinfo->screenCount & DRIVER_CACHE_SCREEN;
+
+		if (gameinfo->isClone)
+			cache += DRIVER_CACHE_CLONE;
+
+		if (gameinfo->isHarddisk)
+			cache += DRIVER_CACHE_HARDDISK;
+
+		if (gameinfo->hasOptionalBIOS)
+			cache += DRIVER_CACHE_BIOS;
+
+		if (gameinfo->isVector)
+			cache += DRIVER_CACHE_VECTOR;
+
+		if (gameinfo->usesRoms)
+			cache += DRIVER_CACHE_ROMS;
+
+		if (gameinfo->usesSamples)
+			cache += DRIVER_CACHE_SAMPLES;
+
+		if (gameinfo->usesTrackball)
+			cache += DRIVER_CACHE_TRACKBALL;
+
+		if (gameinfo->usesLightGun)
+			cache += DRIVER_CACHE_LIGHTGUN;
+
+		SetDriverCache(ndriver, cache);
+	}
+}
+
+static void InitDriversInfo(void)
+{
+	int total = driver_list::total();
+	const game_driver *gamedrv = NULL;
+	struct DriversInfo *gameinfo = NULL;
+
+	for (int ndriver = 0; ndriver < total; ndriver++)
+	{
+		uint32_t cache = GetDriverCacheLower(ndriver);
+		gamedrv = &driver_list::driver(ndriver);
+		gameinfo = &drivers_info[ndriver];
+		machine_config config(*gamedrv, MameUIGlobal());
+		bool const have_parent(strcmp(gamedrv->parent, "0"));
+		auto const parent_idx(have_parent ? driver_list::find(gamedrv->parent) : -1);
+		gameinfo->isClone = ( !have_parent || (0 > parent_idx) || BIT(GetDriverCacheLower(parent_idx),9)) ? false : true;
+		//gameinfo->isClone = (GetParentRomSetIndex(gamedrv) != -1);
+		gameinfo->isBroken = (cache & 0x4040) ? true : false;  // (MACHINE_NOT_WORKING | MACHINE_MECHANICAL)
+		gameinfo->isImperfect = (cache & 0x3fa000) ? true : false;  // MACHINE_INCOMPLETE | NO_SOUND_HW | (IMPERFECT|UNEMULATED) | (PALETTE|GRAPHICS|SOUND)
+		gameinfo->supportsSaveState = BIT(cache, 7) ? true : false;  //MACHINE_SUPPORTS_SAVE
+		gameinfo->isVertical = BIT(cache, 2);  //ORIENTATION_SWAP_XY
+		gameinfo->isMechanical = BIT(cache, 14);  //MACHINE_MECHANICAL
+		gameinfo->isBIOS = BIT(cache, 9);  //MACHINE_IS_BIOS_ROOT
+		gameinfo->screenCount = NumberOfScreens(config);
+		gameinfo->isVector = isDriverVector(config);
+		gameinfo->isHarddisk = false;
+		gameinfo->usesRoms = false;
+		gameinfo->hasOptionalBIOS = false;
+		gameinfo->usesTrackball = false;
+		gameinfo->usesLightGun = false;
+
+		for (device_t &device : device_enumerator(config.root_device()))
+		{
+			for (const rom_entry *region = rom_first_region(device); region; region = rom_next_region(region))
+			{
+				for (const rom_entry *rom = rom_first_file(region); rom; rom = rom_next_file(rom))
+				{
+					if (ROMREGION_ISDISKDATA(region))
+						gameinfo->isHarddisk = true;
+
+					gameinfo->usesRoms = true;
+				}
+			}
+		}
+
+		if (gamedrv->rom)
+		{
+			auto rom_entries = rom_build_entries(gamedrv->rom);
+
+			for (const rom_entry *rom = rom_entries.data(); !ROMENTRY_ISEND(rom); rom++)
+			{
+				if (ROMENTRY_ISSYSTEM_BIOS(rom))
+					gameinfo->hasOptionalBIOS = true;
+			}
+		}
+
+		samples_device_enumerator sampiter(config.root_device());
+		gameinfo->usesSamples = sampiter.first() ? true : false;
+
+		if (gamedrv->ipt)
+		{
+			ioport_list portlist;
+			std::ostringstream errors;
+
+			for (device_t &cfg : device_enumerator(config.root_device()))
+				if (cfg.input_ports())
+					portlist.append(cfg, errors);
+
+			for (auto &port : portlist)
+			{
+				for (ioport_field &field : port.second->fields())
+				{
+					UINT type = field.type();
+
+					if (type == IPT_END)
+						break;
+
+					if (type == IPT_DIAL || type == IPT_PADDLE || type == IPT_TRACKBALL_X || type == IPT_TRACKBALL_Y)
+						gameinfo->usesTrackball = true;
+
+					if (type == IPT_LIGHTGUN_X || type == IPT_LIGHTGUN_Y || type == IPT_AD_STICK_X || type == IPT_AD_STICK_Y)
+						gameinfo->usesLightGun = true;
+				}
+			}
+		}
+	}
+
+	SetDriversInfo();
+}
+
+static void InitDriversCache(void)
+{
+	if (RequiredDriverCache())
+	{
+		InitDriversInfo();
+		return;
+	}
+
+	uint32_t cache_lower, cache_upper;
+	int total = driver_list::total();
+	struct DriversInfo *gameinfo = NULL;
+
+	for (int ndriver = 0; ndriver < total; ndriver++)
+	{
+		gameinfo = &drivers_info[ndriver];
+		cache_lower = GetDriverCacheLower(ndriver);
+		cache_upper = GetDriverCacheUpper(ndriver);
+
+		gameinfo->isBroken          =  (cache_lower & 0x4040) ? true : false; //MACHINE_NOT_WORKING | MACHINE_MECHANICAL
+		gameinfo->supportsSaveState =  BIT(cache_lower, 7) ? true : false;  //MACHINE_SUPPORTS_SAVE
+		gameinfo->isVertical        =  BIT(cache_lower, 2) ? true : false;  //ORIENTATION_XY
+		gameinfo->screenCount       =   cache_upper & DRIVER_CACHE_SCREEN;
+		gameinfo->isClone           = ((cache_upper & DRIVER_CACHE_CLONE) != 0);
+		gameinfo->isHarddisk        = ((cache_upper & DRIVER_CACHE_HARDDISK) != 0);
+		gameinfo->hasOptionalBIOS   = ((cache_upper & DRIVER_CACHE_BIOS) != 0);
+		gameinfo->isVector          = ((cache_upper & DRIVER_CACHE_VECTOR) != 0);
+		gameinfo->usesRoms          = ((cache_upper & DRIVER_CACHE_ROMS) != 0);
+		gameinfo->usesSamples       = ((cache_upper & DRIVER_CACHE_SAMPLES) != 0);
+		gameinfo->usesTrackball     = ((cache_upper & DRIVER_CACHE_TRACKBALL) != 0);
+		gameinfo->usesLightGun      = ((cache_upper & DRIVER_CACHE_LIGHTGUN) != 0);
+		gameinfo->isImperfect       =  (cache_lower & 0x3fa000) ? true : false;
+		gameinfo->isMechanical      =  BIT(cache_lower, 14);
+		gameinfo->isBIOS            =  BIT(cache_lower, 9);
+	}
+}
+
+static struct DriversInfo* GetDriversInfo(int driver_index)
+{
+	static bool bFirst = true;
+
+	if (bFirst)
+	{
+		bFirst = false;
+		drivers_info.clear();
+		drivers_info.reserve(driver_list::total());
+		InitDriversCache();
+	}
+
+	return &drivers_info[driver_index];
+}
+
+bool DriverIsClone(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isClone;
+}
+
+bool DriverIsBroken(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isBroken;
+}
+
+bool DriverIsHarddisk(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isHarddisk;
+}
+
+bool DriverIsBios(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isBIOS;
+}
+
+bool DriverIsMechanical(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isMechanical;
+}
+
+bool DriverHasOptionalBIOS(int driver_index)
+{
+	return GetDriversInfo(driver_index)->hasOptionalBIOS;
+}
+
+int DriverNumScreens(int driver_index)
+{
+	return GetDriversInfo(driver_index)->screenCount;
+}
+
+bool DriverIsVector(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isVector;
+}
+
+bool DriverUsesRoms(int driver_index)
+{
+	return GetDriversInfo(driver_index)->usesRoms;
+}
+
+bool DriverUsesSamples(int driver_index)
+{
+	return GetDriversInfo(driver_index)->usesSamples;
+}
+
+bool DriverUsesTrackball(int driver_index)
+{
+	return GetDriversInfo(driver_index)->usesTrackball;
+}
+
+bool DriverUsesLightGun(int driver_index)
+{
+	return GetDriversInfo(driver_index)->usesLightGun;
+}
+
+bool DriverSupportsSaveState(int driver_index)
+{
+	return GetDriversInfo(driver_index)->supportsSaveState;
+}
+
+bool DriverIsVertical(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isVertical;
+}
+
+bool DriverIsImperfect(int driver_index)
+{
+	return GetDriversInfo(driver_index)->isImperfect;
+}
+
+//============================================================
+//  win_wstring_from_utf8
+//============================================================
+
+wchar_t *win_wstring_from_utf8(const char *utf8string)
+{
+	// convert MAME string (UTF-8) to UTF-16
+	int char_count = MultiByteToWideChar(CP_UTF8, 0, utf8string, -1, nullptr, 0);
+	wchar_t *result = (wchar_t *)malloc(char_count * sizeof(*result));
+
+	if (result != nullptr)
+		MultiByteToWideChar(CP_UTF8, 0, utf8string, -1, result, char_count);
+
+	return result;
+}
+
+
+//============================================================
+//  win_utf8_from_wstring
+//============================================================
+
+char *win_utf8_from_wstring(const wchar_t *wstring)
+{
+	// convert UTF-16 to MAME string (UTF-8)
+	int char_count = WideCharToMultiByte(CP_UTF8, 0, wstring, -1, nullptr, 0, nullptr, nullptr);
+	char *result = (char *)malloc(char_count * sizeof(*result));
+
+	if (result != nullptr)
+		WideCharToMultiByte(CP_UTF8, 0, wstring, -1, result, char_count, nullptr, nullptr);
+
+	return result;
+}
+
+//============================================================
+//  winui_output_debug_string_utf8
+//============================================================
+
+void winui_output_debug_string_utf8(const char *string)
+{
+	wchar_t *t_string = win_wstring_from_utf8(string);
+
+	if (t_string != NULL)
+	{
+		OutputDebugString(t_string);
+		free(t_string);
+	}
+}
+
+//============================================================
+//  winui_message_box_utf8
+//============================================================
+
+int winui_message_box_utf8(HWND hWnd, const char *text, const char *caption, UINT type)
+{
+	int result = IDCANCEL;
+	wchar_t *t_text = win_wstring_from_utf8(text);
+	wchar_t *t_caption = win_wstring_from_utf8(caption);
+
+	if (!t_text)
+		return result;
+
+	if (!t_caption)
+	{
+		free(t_text);
+		return result;
+	}
+
+	result = MessageBox(hWnd, t_text, t_caption, type);
+	free(t_text);
+	free(t_caption);
+	return result;
+}
+
+//============================================================
+//  winui_set_window_text_utf8
+//============================================================
+
+bool winui_set_window_text_utf8(HWND hWnd, const char *text)
+{
+	bool result = false;
+	wchar_t *t_text = win_wstring_from_utf8(text);
+
+	if (!t_text)
+		return result;
+
+	result = SetWindowText(hWnd, t_text);
+	free(t_text);
+	return result;
+}
+
+//============================================================
+//  winui_get_window_text_utf8
+//============================================================
+
+int winui_get_window_text_utf8(HWND hWnd, char *buffer, size_t buffer_size)
+{
+	int result = 0;
+	wchar_t t_buffer[256];
+
+	t_buffer[0] = '\0';
+	// invoke the core Win32 API
+	GetWindowText(hWnd, t_buffer, std::size(t_buffer));
+	char *utf8_buffer = win_utf8_from_wstring(t_buffer);
+
+	if (!utf8_buffer)
+		return result;
+
+	result = snprintf(buffer, buffer_size, "%s", utf8_buffer);
+	free(utf8_buffer);
+	return result;
+}
+
+//============================================================
+//  winui_extract_icon_utf8
+//============================================================
+
+HICON winui_extract_icon_utf8(HINSTANCE inst, const char* exefilename, UINT iconindex)
+{
+	wchar_t *t_exefilename = win_wstring_from_utf8(exefilename);
+
+	if (!t_exefilename)
+		return NULL;
+
+	HICON icon = ExtractIcon(inst, t_exefilename, iconindex);
+	free(t_exefilename);
+	return icon;
+}
+
+//============================================================
+//  winui_find_first_file_utf8
+//============================================================
+
+HANDLE winui_find_first_file_utf8(const char* filename, WIN32_FIND_DATA *findfiledata)
+{
+	wchar_t *t_filename = win_wstring_from_utf8(filename);
+
+	if (!t_filename)
+		return NULL;
+
+	HANDLE result = FindFirstFile(t_filename, findfiledata);
+	free(t_filename);
+	return result;
+}
+
+//============================================================
+//  winui_move_file_utf8
+//============================================================
+
+bool winui_move_file_utf8(const char* existingfilename, const char* newfilename)
+{
+	bool result = false;
+
+	wchar_t *t_existingfilename = win_wstring_from_utf8(existingfilename);
+
+	if (!t_existingfilename)
+		return result;
+
+	wchar_t *t_newfilename = win_wstring_from_utf8(newfilename);
+
+	if (!t_newfilename) 
+	{
+		free(t_existingfilename);
+		return result;
+	}
+
+	result = MoveFile(t_existingfilename, t_newfilename);
+	free(t_newfilename);
+	free(t_existingfilename);
+	return result;
+}
+
+void CenterWindow(HWND hWnd)
+{
+	RECT rcCenter, rcWnd;
+	HWND hWndParent = GetParent(hWnd);
+
+	GetWindowRect(hWnd, &rcWnd);
+	int iWndWidth  = rcWnd.right - rcWnd.left;
+	int iWndHeight = rcWnd.bottom - rcWnd.top;
+
+	if (hWndParent != NULL)
+	{
+		GetWindowRect(hWndParent, &rcCenter);
+	}
+	else
+	{
+		rcCenter.left = 0;
+		rcCenter.top = 0;
+		rcCenter.right = GetSystemMetrics(SM_CXFULLSCREEN);
+		rcCenter.bottom = GetSystemMetrics(SM_CYFULLSCREEN);
+	}
+
+	int iScrWidth  = rcCenter.right - rcCenter.left;
+	int iScrHeight = rcCenter.bottom - rcCenter.top;
+	int xLeft = rcCenter.left;
+	int yTop = rcCenter.top;
+
+	if (iScrWidth > iWndWidth)
+		xLeft += ((iScrWidth - iWndWidth) / 2);
+
+	if (iScrHeight > iWndHeight)
+		yTop += ((iScrHeight - iWndHeight) / 2);
+
+	// map screen coordinates to child coordinates
+	SetWindowPos(hWnd, HWND_TOP, xLeft, yTop, -1, -1, SWP_NOSIZE);
+}
+
+//缘来是你
+/*************** eziochiu 添加 IPS *****************/
+struct PatchInfo
+{
+	std::string filename;
+	std::string title;
+	std::string desc;       
+	std::string category;    
+	std::string image_path;  
+};
+
+static std::vector<PatchInfo> s_current_patches;
+static int s_current_patch_game_index = -1;
+static int s_current_patch_parent_index = -1;
+
+static std::map<std::string, std::vector<std::string>> s_dep_table;
+static std::vector<std::vector<std::string>> s_conf_table;
+static std::map<std::string, bool> s_patch_state;
+
+static void ParseRelations(const std::string& game_ips_path)
+{
+	s_dep_table.clear();
+	s_conf_table.clear();
+	
+	std::string assistant_path = game_ips_path + "assistant.txt";
+	FILE *f = fopen(assistant_path.c_str(), "r");
+	if (!f) return;
+	
+	char line[1024];
+	while (fgets(line, sizeof(line), f))
+	{
+		size_t len = strlen(line);
+		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+			line[--len] = 0;
+		
+		char *p = line;
+		while (*p && isspace((unsigned char)*p)) p++;
+		if (*p == 0 || *p == '#') continue; 
+		
+		char *arrow = strchr(p, '>');
+		if (arrow)
+		{
+			*arrow = 0;
+			std::string parent = p;
+			parent.erase(std::remove_if(parent.begin(), parent.end(), ::isspace), parent.end());
+			std::transform(parent.begin(), parent.end(), parent.begin(), ::tolower);
+			
+			char *children_str = arrow + 1;
+			std::vector<std::string> children;
+			char *tok = strtok(children_str, ",");
+			while (tok)
+			{
+				std::string child = tok;
+				child.erase(std::remove_if(child.begin(), child.end(), ::isspace), child.end());
+				std::transform(child.begin(), child.end(), child.begin(), ::tolower);
+				if (!child.empty())
+					children.push_back(child);
+				tok = strtok(nullptr, ",");
+			}
+			
+			if (!parent.empty() && !children.empty())
+				s_dep_table[parent] = children;
+		}
+		else
+		{
+			std::vector<std::string> conflicts;
+			char *tok = strtok(p, ",");
+			while (tok)
+			{
+				std::string conf = tok;
+				conf.erase(std::remove_if(conf.begin(), conf.end(), ::isspace), conf.end());
+				std::transform(conf.begin(), conf.end(), conf.begin(), ::tolower);
+				if (!conf.empty())
+					conflicts.push_back(conf);
+				tok = strtok(nullptr, ",");
+			}
+			
+			if (conflicts.size() >= 2)
+				s_conf_table.push_back(conflicts);
+		}
+	}
+	fclose(f);
+}
+
+static void InitPatchState()
+{
+	s_patch_state.clear();
+	for (const auto& patch : s_current_patches)
+	{
+		std::string name = patch.filename;
+		std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+		s_patch_state[name] = false;
+	}
+}
+
+static void ValidateConflicts(const std::string& patch_name)
+{
+	if (!s_patch_state[patch_name])
+		return;
+	
+	for (const auto& conf_group : s_conf_table)
+	{
+		bool found = std::find(conf_group.begin(), conf_group.end(), patch_name) != conf_group.end();
+		if (found)
+		{
+			for (const auto& other : conf_group)
+			{
+				if (other != patch_name && s_patch_state[other])
+				{
+					s_patch_state[other] = false;
+				}
+			}
+		}
+	}
+}
+
+static void ValidateDependencies(const std::string& patch_name)
+{
+	if (!s_patch_state[patch_name])
+	{
+		auto it = s_dep_table.find(patch_name);
+		if (it != s_dep_table.end())
+		{
+			for (const auto& child : it->second)
+			{
+				if (s_patch_state[child])
+				{
+					bool has_other_parent = false;
+					for (const auto& dep : s_dep_table)
+					{
+						if (dep.first == patch_name) continue;
+						if (!s_patch_state[dep.first]) continue;
+						
+						if (std::find(dep.second.begin(), dep.second.end(), child) != dep.second.end())
+						{
+							has_other_parent = true;
+							break;
+						}
+					}
+					
+					if (!has_other_parent)
+					{
+						s_patch_state[child] = false;
+						ValidateDependencies(child); 
+					}
+				}
+			}
+		}
+	}
+	else
+	{
+		for (const auto& dep : s_dep_table)
+		{
+			const std::vector<std::string>& children = dep.second;
+			if (std::find(children.begin(), children.end(), patch_name) != children.end())
+			{
+				const std::string& parent = dep.first;
+				if (!s_patch_state[parent])
+				{
+					s_patch_state[parent] = true;
+					ValidateConflicts(parent);
+					ValidateDependencies(parent);
+				}
+			}
+		}
+	}
+}
+
+static int s_ips_lang_override = -1;
+
+void SetIPSLangOverride(int langIndex)
+{
+	s_ips_lang_override = langIndex;
+	s_current_patch_game_index = -1;
+}
+
+static void UpdatePatches(int nGame, int nParent)
+{
+	if (nGame == s_current_patch_game_index && nParent == s_current_patch_parent_index)
+		return;
+
+	s_current_patch_game_index = nGame;
+	s_current_patch_parent_index = nParent;
+	s_current_patches.clear();
+
+	const char *ipspath = GetIpsDir();
+	if (!ipspath) return;
+
+	const char *game_name = driver_list::driver(nGame).name;
+	if (!game_name) return;
+
+	std::string game_ips_path = std::string(ipspath).append(PATH_SEPARATOR).append(game_name).append(PATH_SEPARATOR);
+	std::string search_path = game_ips_path + "*.dat";
+
+	const char* lang_tags_cn[] = { "[zh_CN]", "[zh_TW]", "[en_US]", nullptr };
+	const char* lang_tags_tw[] = { "[zh_TW]", "[zh_CN]", "[en_US]", nullptr };
+	const char* lang_tags_en[] = { "[en_US]", "[zh_CN]", "[zh_TW]", nullptr };
+	
+	const char** lang_tags;
+	
+	if (s_ips_lang_override != -1)
+	{
+		switch (s_ips_lang_override)
+		{
+			case 0: lang_tags = lang_tags_cn; break;
+			case 1: lang_tags = lang_tags_tw; break;
+			case 2: lang_tags = lang_tags_en; break;
+			default: lang_tags = lang_tags_en; break;
+		}
+	}
+	else
+	{
+		lang_tags = lang_tags_en;
+	}
+
+	WIN32_FIND_DATA findData;
+	HANDLE hFind = winui_find_first_file_utf8(search_path.c_str(), &findData);
+	if (hFind == INVALID_HANDLE_VALUE)
+		return;
+
+	do
+	{
+		char *utf8_filename = win_utf8_from_wstring(findData.cFileName);
+		if (!utf8_filename) continue;
+
+		std::string filename(utf8_filename);
+		free(utf8_filename);
+
+		if (filename == "." || filename == "..") continue;
+		if (filename == "assistant.txt") continue; 
+
+		std::string full_path = game_ips_path + filename;
+		FILE *f = fopen(full_path.c_str(), "r");
+		if (f)
+		{
+			char line[2048];
+			std::string title;
+			std::string desc;
+			std::string category;
+			bool found_desc = false;
+			int current_lang_priority = 999;
+			
+			bool in_lang_section = false;
+			int lang_priority = 999;
+
+			while (fgets(line, sizeof(line), f))
+			{
+				size_t len = strlen(line);
+				while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+					line[--len] = 0;
+
+				char *p = line;
+				while (*p && isspace((unsigned char)*p)) p++;
+				if (*p == 0) continue;
+
+				if (*p == '[')
+				{
+					in_lang_section = false;
+					for (int i = 0; lang_tags[i] != nullptr; i++)
+					{
+						if (strstr(p, lang_tags[i]) == p)
+						{
+							lang_priority = i;
+							in_lang_section = true;
+							break;
+						}
+					}
+					continue;
+				}
+
+				if (in_lang_section && lang_priority <= current_lang_priority)
+				{
+					if (found_desc == false || lang_priority < current_lang_priority)
+					{
+						desc = p;
+						
+						char *sep = strchr(p, '/');
+						if (sep)
+						{
+							std::string line_copy = p;
+							size_t sep_pos = sep - p;
+							category = line_copy.substr(0, sep_pos);
+						title = line_copy.substr(sep_pos + 1) + "[" + filename + "]";
+						}
+						else
+						{
+							category.clear();
+						title = std::string(p) + "[" + filename + "]";
+						}
+						current_lang_priority = lang_priority;
+						found_desc = true;
+					}
+					else if (lang_priority == current_lang_priority)
+					{
+						desc += "\r\n";
+						desc += p;
+					}
+				}
+			}
+			fclose(f);
+			PatchInfo pi;
+			pi.filename = filename.substr(0, filename.length() - 4);
+			pi.title = found_desc ? title : (pi.filename + "[" + filename + "]");
+			pi.desc = found_desc ? desc : pi.filename;
+			pi.category = category;
+			const char* img_exts[] = { ".png", ".jpg", ".bmp", nullptr };
+			for (int ext_i = 0; img_exts[ext_i] != nullptr; ext_i++)
+			{
+				std::string img_path = game_ips_path + pi.filename + img_exts[ext_i];
+				FILE *img_test = fopen(img_path.c_str(), "rb");
+				if (img_test)
+				{
+					fclose(img_test);
+					pi.image_path = img_path;
+					break;
+				}
+			}
+			
+			s_current_patches.push_back(pi);
+		}
+
+	} while (FindNextFile(hFind, &findData));
+
+	FindClose(hFind);
+}
+
+int GetPatchCount(int nGame, int nParentIndex)
+{
+	UpdatePatches(nGame, nParentIndex);
+	return s_current_patches.size();
+}
+
+char* GetPatchFilename(int nGame, int nParentIndex, int nPatchIndex)
+{
+	UpdatePatches(nGame, nParentIndex);
+	if (nPatchIndex >= 0 && nPatchIndex < s_current_patches.size())
+		return (char*)s_current_patches[nPatchIndex].filename.c_str();
+	return nullptr;
+}
+
+char* GetPatchDesc(int nGame, int nParentIndex, int nPatchIndex)
+{
+	UpdatePatches(nGame, nParentIndex);
+	if (nPatchIndex >= 0 && nPatchIndex < s_current_patches.size())
+		return (char*)s_current_patches[nPatchIndex].desc.c_str();
+	return nullptr;
+}
+
+char* GetPatchTitle(int nGame, int nParentIndex, int nPatchIndex)
+{
+	UpdatePatches(nGame, nParentIndex);
+	if (nPatchIndex >= 0 && nPatchIndex < s_current_patches.size())
+		return (char*)s_current_patches[nPatchIndex].title.c_str();
+	return nullptr;
+}
+
+char* GetPatchCategory(int nGame, int nParentIndex, int nPatchIndex)
+{
+	UpdatePatches(nGame, nParentIndex);
+	if (nPatchIndex >= 0 && nPatchIndex < s_current_patches.size())
+		return (char*)s_current_patches[nPatchIndex].category.c_str();
+	return nullptr;
+}
+
+char* GetPatchImagePath(int nGame, int nParentIndex, int nPatchIndex)
+{
+	UpdatePatches(nGame, nParentIndex);
+	if (nPatchIndex >= 0 && nPatchIndex < s_current_patches.size())
+		return (char*)s_current_patches[nPatchIndex].image_path.c_str();
+	return nullptr;
+}
+/**************************************************/
+
+bool IsWindowsSevenOrHigher(void) 
+{
+	OSVERSIONINFO osvi;
+
+	memset(&osvi, 0, sizeof(OSVERSIONINFO));
+	osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+
+	GetVersionEx(&osvi);
+
+	if ((osvi.dwMajorVersion >= 6) && (osvi.dwMinorVersion >= 1))
+		return true;
+
+	return false;
+}
+
+//缘来是你
+/*************** eziochiu 添加 IPS *****************/
+void IPSLoadRelations(int nGame, int nParentIndex)
+{
+	UpdatePatches(nGame, nParentIndex);
+	
+	const char *ipspath = GetIpsDir();
+	if (!ipspath) return;
+	
+	const char *game_name = driver_list::driver(nGame).name;
+	std::string game_ips_path = std::string(ipspath) + PATH_SEPARATOR + game_name + PATH_SEPARATOR;
+	
+	ParseRelations(game_ips_path);
+	
+	InitPatchState();
+}
+
+void IPSSetPatchState(const char* patch_name, bool checked)
+{
+	std::string name = patch_name;
+	std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+	
+	s_patch_state[name] = checked;
+	
+	if (checked)
+	{
+		ValidateConflicts(name);
+		ValidateDependencies(name);
+	}
+	else
+	{
+		ValidateDependencies(name);
+	}
+}
+
+bool IPSGetPatchState(const char* patch_name)
+{
+	std::string name = patch_name;
+	std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+	
+	auto it = s_patch_state.find(name);
+	if (it != s_patch_state.end())
+		return it->second;
+	return false;
+}
+
+void IPSGetAllPatchStates(int nGame, int nParentIndex, bool* states, int max_count)
+{
+	UpdatePatches(nGame, nParentIndex);
+	
+	int count = (int)s_current_patches.size();
+	if (count > max_count) count = max_count;
+	
+	for (int i = 0; i < count; i++)
+	{
+		std::string name = s_current_patches[i].filename;
+		std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+		
+		auto it = s_patch_state.find(name);
+		states[i] = (it != s_patch_state.end()) ? it->second : false;
+	}
+}

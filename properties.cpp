@@ -1,0 +1,4601 @@
+// license:BSD-3-Clause
+// For licensing and usage information, read docs/release/winui_license.txt
+
+/***************************************************************************
+ 
+MSH - 20070809
+--
+Notes on properties and ini files, reset and reset to default.
+----------------------------------------------------------------------------
+Each ini contains a complete option set.
+
+Priority order for option sets (Lowest to Highest):
+
+built-in defaults
+program     ini (executable root filename ini)
+debug       ini (if running a debug build)
+vector      ini (really is vector.ini!)
+vertical    ini (really is vertical.ini!)
+horizont    ini (really is horizont.ini!)
+driver      ini (source code root filename in which this driver is found)
+grandparent ini (grandparent, not sure these exist, but it is possible)
+parent      ini (where parent is the name of the parent driver)
+game        ini (where game is the driver name for this game)
+
+To determine which option set to use, start at the top level (lowest
+priority), and overlay all higher priority ini's until the desired level
+is reached.
+
+The 'default' option set is the next priority higher up the list from
+the desired level. For the default (program.ini) level, it is also the
+default.
+
+When MAME is run, the desired level is game ini.
+
+Expected Code behavior:
+----------------------------------------------------------------------------
+This approach requires 3 option sets, 'current', 'original' and 'default'.
+
+'current': used to populate the property pages, and to initialize the
+'original' set.
+
+'original': used to evaluate if the 'Reset' button is enabled.
+If 'current' matches 'original', the 'Reset' button is disabled,
+otherwise it is enabled.
+
+'default': used to evaluate if the 'Restore to Defaults' button is enabled.
+If 'current' matches 'default', the 'Restore to Defaults' button is disabled,
+otherwise it is enabled.
+
+When editing any option set, the desired level is set to the one being
+edited, the default set for that level, is the next lower priority set found.
+
+Upon entering the properties dialog:
+a) 'current' is initialized
+b) 'original' is initialized by 'current'
+c) 'default' is initialized
+d) Populate Property pages with 'current'
+e) 'Reset' and 'Restore to Defaults' buttons are evaluated.
+
+After any change:
+a) 'current' is updated
+b) 'Reset' and 'Restore to Defaults' buttons are re-evaluated.
+
+Reset:
+a) 'current' is reinitialized to 'original'
+b) Re-populate Property pages with 'current'
+c) 'Reset' and 'Restore to Defaults' buttons are re-evaluated.
+
+Restore to Defaults:
+a) 'current' is reinitialized to 'default'
+b) Re-populate Property pages with 'current'
+b) 'Reset' and 'Restore to Defaults' buttons are re-evaluated.
+
+Apply:
+a) 'original' is reinitialized to 'current'
+b) 'Reset' and 'Restore to defaults' are re-evaluated.
+c) If they 'current' matches 'default', remove the ini from disk.
+   Otherwise, write the ini to disk.
+
+Cancel:
+a) Exit the dialog.
+
+OK:
+a) If they 'current' matches 'default', remove the ini from disk.
+   Otherwise, write the ini to disk.
+b) Exit the dialog.
+
+
+***************************************************************************/
+
+#include "winui.h"
+//缘来是你 
+/*************** eziochiu 添加 IPS *****************/
+#include <set>
+#include <sstream>
+#include <gdiplus.h>
+#undef min
+#undef max
+/**************************************************/
+
+/**************************************************************
+ * Local function prototypes
+ **************************************************************/
+
+static intptr_t CALLBACK GameOptionsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static void InitializeOptions(HWND hDlg);
+static void OptOnHScroll(HWND hWnd, HWND hWndCtl, UINT code, int pos);
+static void NumScreensSelectionChange(HWND hWnd);
+static void RefreshSelectionChange(HWND hWnd, HWND hWndCtrl);
+static void InitializeSampleRateUI(HWND hWnd);
+static void InitializeSoundModeUI(HWND hWnd);
+static void InitializeSkippingUI(HWND hWnd);
+static void InitializeRotateUI(HWND hWnd);
+static void UpdateSelectScreenUI(HWND hWnd);
+static void InitializeSelectScreenUI(HWND hWnd);
+static void InitializeVideoUI(HWND hWnd);
+static void InitializeSnapViewUI(HWND hWnd);
+static void InitializeSnapNameUI(HWND hWnd);
+static void InitializeBIOSUI(HWND hWnd);
+static void InitializeControllerMappingUI(HWND hWnd);
+static void InitializeLanguageUI(HWND hWnd);
+static void InitializePluginsUI(HWND hWnd);
+//缘来是你 
+/*************** eziochiu 添加 IPS *****************/
+static void InitializeIPSUI(HWND hWnd);
+static bool IPSPopulateControl(datamap *map, HWND hDlg, HWND hWndCtrl, windows_options &opts, const char *option_name);
+static bool IPSReadControl(datamap *map, HWND hDlg, HWND hWndCtrl, windows_options &opts, const char *option_name);
+static void IPSSelectionChange(HWND hDlg, HWND hWndCtrl);
+/**************************************************/
+static void InitializeGLSLFilterUI(HWND hWnd);
+static void InitializeBGFXBackendUI(HWND);
+static void UpdateOptions(HWND hDlg, datamap *map, windows_options &opts);
+static void UpdateProperties(HWND hDlg, datamap *map, windows_options &opts);
+static void PropToOptions(HWND hWnd, windows_options &opts);
+static void OptionsToProp(HWND hWnd, windows_options &opts);
+static void SetPropEnabledControls(HWND hWnd);
+static bool SelectEffect(HWND hWnd);
+static bool ResetEffect(HWND hWnd);
+static bool SelectMameShader(HWND hWnd, int slot);
+static bool ResetMameShader(HWND hWnd, int slot);
+static void UpdateMameShader(HWND hWnd, int slot, windows_options &opts);
+static bool SelectScreenShader(HWND hWnd, int slot);
+static bool ResetScreenShader(HWND hWnd, int slot);
+static void UpdateScreenShader(HWND hWnd, int slot, windows_options &opts);
+static bool SelectCheatFile(HWND hWnd);
+static bool ResetCheatFile(HWND hWnd);
+static BOOL ChangeFallback(HWND hWnd);
+static BOOL ChangeOverride(HWND hWnd);
+static bool ChangeJoystickMap(HWND hWnd);
+static bool ResetJoystickMap(HWND hWnd);
+static bool SelectLUAScript(HWND hWnd);
+static bool ResetLUAScript(HWND hWnd);
+static bool SelectPlugins(HWND hWnd);
+static bool ResetPlugins(HWND hWnd);
+static bool SelectBGFXChains(HWND hWnd);
+static bool ResetBGFXChains(HWND hWnd);
+static void BuildDataMap(void);
+static void ResetDataMap(HWND hWnd);
+//mamefx: for coloring of changed elements
+static bool IsControlOptionValue(HWND hDlg, HWND hWnd_ctrl, windows_options &opts, windows_options &ref);
+static void DisableVisualStyles(HWND hDlg);
+static void MovePropertySheetChildWindows(HWND hWnd, int nDx, int nDy);
+static HTREEITEM GetSheetPageTreeItem(int nPage);
+static int GetSheetPageTreeCurSelText(LPWSTR lpszText, int iBufSize);
+static void ModifyPropertySheetForTreeSheet(HWND hPageDlg);
+
+/**************************************************************
+ * Local private variables
+ **************************************************************/
+
+static windows_options pDefaultOpts;
+static windows_options pOrigOpts;
+static windows_options m_CurrentOpts;
+static datamap *properties_datamap;
+static int g_nGame = 0;
+static int g_nFolder = 0;
+static int g_nFolderGame = 0;
+static int g_nPropertyMode = 0;
+static bool g_bUseDefaults = false;
+static bool g_bReset = false;
+static bool g_bAutoAspect[MAX_SCREENS] = {false, false, false, false};
+static bool g_bAutoSnapSize = false;
+static HICON hIcon = NULL;
+static HBRUSH hBrush = NULL;
+static HBRUSH hBrushDlg = NULL;
+static HDC hDC = NULL;
+static int status_color = 0;
+static int g_nFirstInitPropertySheet = 0;
+static RECT rcTabCtrl;
+static RECT rcTabCaption;
+static RECT rcChild;
+static int nCaptionHeight = 0;
+static HWND hSheetTreeCtrl = NULL;
+static HINSTANCE hSheetInstance = 0;
+static WNDPROC pfnOldSheetProc = NULL;
+static bool bPageTreeSelChangedActive = false;
+//mamefx: for coloring of changed elements
+static windows_options pOptsGlobal;
+static windows_options pOptsHorizontal;
+static windows_options pOptsVertical;
+static windows_options pOptsRaster;
+static windows_options pOptsVector;
+static windows_options pOptsSource;
+
+static struct PropSheets
+{
+	DWORD dwDlgID;
+	DLGPROC pfnDlgProc;
+} g_PropSheets[] = 
+{
+	{ IDD_PROP_DISPLAY,		GameOptionsDialogProc },
+	{ IDD_PROP_ADVANCED,	GameOptionsDialogProc },
+	{ IDD_PROP_SCREEN,		GameOptionsDialogProc },
+	{ IDD_PROP_OPENGL,		GameOptionsDialogProc },
+	{ IDD_PROP_SHADER,		GameOptionsDialogProc },
+	{ IDD_PROP_VECTOR,		GameOptionsDialogProc },
+	{ IDD_PROP_SOUND,		GameOptionsDialogProc },
+	{ IDD_PROP_INPUT,		GameOptionsDialogProc },
+	{ IDD_PROP_CONTROLLER,	GameOptionsDialogProc },
+	{ IDD_PROP_MISC,		GameOptionsDialogProc },
+	{ IDD_PROP_MISC2,		GameOptionsDialogProc },
+	{ IDD_PROP_SNAP,		GameOptionsDialogProc },
+	//缘来是你
+	{ IDD_PROP_IPS,			GameOptionsDialogProc }	// IPS
+};
+
+typedef struct
+{
+	const TCHAR* m_pText;
+	const char* m_pData;
+}
+DUALCOMBOSTR;
+
+typedef struct
+{
+	const TCHAR* m_pText;
+	const int m_pData;
+}
+DUALCOMBOINT;
+
+const DUALCOMBOSTR g_ComboBoxVideo[] =
+{
+	{ TEXT("自动"),         "auto"   },
+	{ TEXT("GDI"),          "gdi"    },
+	{ TEXT("Direct3D"),     "d3d"    },
+	{ TEXT("OpenGL"),       "opengl" },
+	{ TEXT("BGFX"),         "bgfx"   }
+//	{ TEXT("无"),         "none"   }
+};
+
+const DUALCOMBOSTR g_ComboBoxSound[] =
+{
+	{ TEXT("无"),                  "none"    },
+	{ TEXT("自动"),                  "auto"    },
+	{ TEXT("DirectSound"),           "dsound"  },
+	{ TEXT("PortAudio"),             "portaudio" },
+	{ TEXT("Wasapi"),                "wasapi" },
+	{ TEXT("XAudio2"), "xaudio2" },
+};
+
+const DUALCOMBOINT g_ComboBoxSampleRate[] =
+{
+	{ TEXT("11025"),    11025 },
+	{ TEXT("22050"),    22050 },
+	{ TEXT("44100"),    44100 },
+	{ TEXT("48000"),    48000 }
+};
+
+const DUALCOMBOINT g_ComboBoxSelectScreen[] =
+{
+	{ TEXT("屏幕 0"),    0 },
+	{ TEXT("屏幕 1"),    1 },
+	{ TEXT("屏幕 2"),    2 },
+	{ TEXT("屏幕 3"),    3 }
+};
+
+const DUALCOMBOSTR g_ComboBoxView[] =
+{
+	{ TEXT("自动"),         "auto"     },
+	{ TEXT("标准"),     "standard" },
+	{ TEXT("像素比例"), "pixel"    },
+	{ TEXT("混合机台"),     "cocktail" }
+};
+
+const DUALCOMBOINT g_ComboBoxFrameSkip[] = 
+{
+	{ TEXT("不跳帧"), 0  },
+	{ TEXT("跳过 1 帧"),     1  },
+	{ TEXT("跳过 2 帧"),    2  },
+	{ TEXT("跳过 3 帧"),    3  },
+	{ TEXT("跳过 4 帧"),    4  },
+	{ TEXT("跳过 5 帧"),    5  },
+	{ TEXT("跳过 6 帧"),    6  },
+	{ TEXT("跳过 7 帧"),    7  },
+	{ TEXT("跳过 8 帧"),    8  },
+	{ TEXT("跳过 9 帧"),    9  },
+	{ TEXT("跳过 10 帧"),  10 }
+};
+
+const DUALCOMBOSTR g_ComboBoxDevice[] =
+{
+	{ TEXT("无"),        "none"     },
+	{ TEXT("键盘"),    "keyboard" },
+	{ TEXT("鼠标"),       "mouse"    },
+	{ TEXT("操纵杆"),    "joystick" },
+	{ TEXT("光枪"),    "lightgun" }
+};
+
+const DUALCOMBOSTR g_ComboBoxSnapName[] =
+{
+	{ TEXT("游戏名称"),                       "%g" },
+	{ TEXT("游戏名称 + 增量"),           "%g%i" },
+	{ TEXT("游戏名称/游戏名称"),              "%g/%g" },
+	{ TEXT("游戏名称/游戏名称 + 增量"),  "%g/%g%i" },
+	{ TEXT("游戏名称/增量"),             "%g/%i" }
+};
+
+const DUALCOMBOSTR g_ComboBoxSnapView[] =
+{
+	{ TEXT("自动"),         "auto"     },
+	{ TEXT("内部"),     "internal" },
+	{ TEXT("标准"),     "standard" },
+	{ TEXT("像素比例"), "pixel"    },
+	{ TEXT("混合机台"),     "cocktail" }
+};
+
+const DUALCOMBOSTR g_ComboBoxGLSLFilter[] =
+{
+	{ TEXT("平滑"),    "0" },
+	{ TEXT("双线性过滤"), "1" },
+	{ TEXT("三次立方"),  "2" }
+};
+
+const DUALCOMBOSTR g_ComboBoxBGFXBackend[] =
+{
+	{ TEXT("自动"),                "auto" },
+	{ TEXT("DirectX9"),            "dx9"  },
+	{ TEXT("DirectX11"),           "dx11" },
+	{ TEXT("DirectX12 (Win10)"),   "dx12" },
+	{ TEXT("GLES"),                "gles" },
+	{ TEXT("GLSL"),                "glsl" },
+	{ TEXT("Metal (Win10)"),       "metal" },
+	{ TEXT("Vulkan (Win10)"),      "vulkan" },
+};
+
+/***************************************************************
+ * Public functions
+ ***************************************************************/
+
+static int GetSelectedScreen(HWND hWnd)
+{
+	int nSelectedScreen = 0;
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SCREENSELECT);
+
+	if (hCtrl)
+		nSelectedScreen = ComboBox_GetCurSel(hCtrl);
+
+	if ((nSelectedScreen < 0) || (nSelectedScreen >= NUMSELECTSCREEN))
+		nSelectedScreen = 0;
+
+	return nSelectedScreen;
+}
+
+static PROPSHEETPAGE *CreatePropSheetPages(HINSTANCE hInst, UINT *pnMaxPropSheets)
+{
+	PROPSHEETPAGE *pspages = (PROPSHEETPAGE *)malloc(sizeof(PROPSHEETPAGE) * NUMPAGES);
+
+	if (!pspages)
+		return NULL;
+
+	memset(pspages, 0, sizeof(PROPSHEETPAGE) * NUMPAGES);
+
+	for (int i = 0; i < NUMPAGES; i++)
+	{
+		pspages[i].dwSize = sizeof(PROPSHEETPAGE);
+		pspages[i].dwFlags = 0;
+		pspages[i].hInstance = hInst;
+		pspages[i].pszTemplate = MAKEINTRESOURCE(g_PropSheets[i].dwDlgID);
+		pspages[i].pfnCallback = NULL;
+		pspages[i].lParam = 0;
+		pspages[i].pfnDlgProc = g_PropSheets[i].pfnDlgProc;
+	}
+
+	if (pnMaxPropSheets)
+		*pnMaxPropSheets = NUMPAGES;
+
+	return pspages;
+}
+
+/* Initialize the property pages */
+void InitPropertyPage(HINSTANCE hInst, HWND hWnd, OPTIONS_TYPE opt_type, int folder_id, int game_num)
+{
+	PROPSHEETHEADER pshead;
+	OPTIONS_TYPE default_type = opt_type;
+	char tmp[512];
+
+	// Load the current options, this will pickup the highest priority option set.
+	LoadOptions(m_CurrentOpts, opt_type, game_num);
+
+	// Load the default options, pickup the next lower options set than the current level.
+	if (opt_type > OPTIONS_GLOBAL)
+	{
+		default_type = (OPTIONS_TYPE)(default_type - 1);
+
+		if (OPTIONS_VERTICAL == opt_type) 
+			//since VERTICAL and HORIZONTAL are equally ranked
+			//we need to subtract 2 from vertical to also get to correct default
+			default_type = (OPTIONS_TYPE)(default_type - 1);
+
+		if (OPTIONS_VECTOR == opt_type) 
+			//since VECTOR and RASTER are equally ranked
+			//we need to subtract 2 from vector to also get to correct default
+			default_type = (OPTIONS_TYPE)(default_type - 1);
+	}
+
+	LoadOptions(pDefaultOpts, default_type, game_num);
+	//mamefx: for coloring of changed elements
+	LoadOptions(pOptsGlobal, OPTIONS_GLOBAL, game_num);
+	LoadOptions(pOptsHorizontal, OPTIONS_HORIZONTAL, game_num);
+	LoadOptions(pOptsVertical, OPTIONS_VERTICAL, game_num);
+	LoadOptions(pOptsRaster, OPTIONS_RASTER, game_num);
+	LoadOptions(pOptsVector, OPTIONS_VECTOR, game_num);
+	LoadOptions(pOptsSource, OPTIONS_SOURCE, game_num);
+	// Copy current_options to original options
+	pOrigOpts.copy_from(m_CurrentOpts);
+	// These MUST be valid, they are used as indicies
+	g_nGame = game_num;
+	g_nFolder = folder_id;
+	// Keep track of OPTIONS_TYPE that was passed in.
+	g_nPropertyMode = opt_type;
+	// Evaluate if the current set uses the Default set
+	g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+	g_bReset = false;
+	BuildDataMap();
+	// Create the property sheets
+	memset(&pshead, 0, sizeof(PROPSHEETHEADER));
+	PROPSHEETPAGE *pspage = CreatePropSheetPages(hInst, &pshead.nPages);
+
+	if (!pspage)
+		return;
+
+	// Get the description use as the dialog caption.
+	switch(opt_type)
+	{
+// 缘来是你
+/******************************************** 中文列表 ************************************************/
+		case OPTIONS_GAME:
+			snprintf(tmp, std::size(tmp), "%s 的属性", GetDescriptionByIndex(g_nGame, GetUsechineseList()));
+			break;
+/*****************************************************************************************************/
+
+		case OPTIONS_RASTER:
+		case OPTIONS_VECTOR:
+		case OPTIONS_VERTICAL:
+		case OPTIONS_HORIZONTAL:
+			snprintf(tmp, std::size(tmp), "%s 游戏的属性", GetFolderNameByID(g_nFolder));
+			break;
+
+		case OPTIONS_SOURCE:
+			snprintf(tmp, std::size(tmp), "%s 驱动程序游戏的属性", GetDriverFileName(g_nGame));
+			break;
+
+		case OPTIONS_GLOBAL:
+			strcpy(tmp, "所有游戏属性");
+			break;
+
+		default:
+			free(pspage);
+			return;
+	}
+
+	wchar_t *t_description = win_wstring_from_utf8(tmp);
+
+	// If we have no descrption, return.
+	if(!t_description)
+	{
+		free(pspage);
+		return;
+	}
+
+	/* Fill in the property sheet header */
+	pshead.pszCaption = t_description;
+	pshead.hwndParent = hWnd;
+	pshead.dwSize = sizeof(PROPSHEETHEADER);
+	pshead.dwFlags = PSH_PROPSHEETPAGE | PSH_USEICONID | PSH_DEFAULT | PSH_NOCONTEXTHELP;
+	pshead.hInstance = hInst;
+	pshead.nStartPage = 0;
+	pshead.pszIcon = MAKEINTRESOURCE(IDI_MAMEUI_ICON);
+	pshead.ppsp = pspage;
+
+	g_nFirstInitPropertySheet = 1;
+	hSheetInstance = hInst;
+
+	/* Create the Property sheet and display it */
+	if (PropertySheet(&pshead) == -1)
+	{
+		DWORD dwError = GetLastError();
+		ErrorMessageBox("PropertySheet creation error %d %X", (int)dwError, (int)dwError);
+	}
+
+	free(t_description);
+	free(pspage);
+}
+//缘来是你
+/*************** eziochiu 添加 IPS *****************/
+static HBITMAP LoadImageFromFile(const wchar_t* filepath, int maxWidth, int maxHeight)
+{
+	if (!filepath || !filepath[0])
+		return NULL;
+
+	Gdiplus::Bitmap* bitmap = Gdiplus::Bitmap::FromFile(filepath);
+	if (!bitmap) return NULL;
+
+	if (bitmap->GetLastStatus() != Gdiplus::Ok)
+	{
+		delete bitmap;
+		return NULL;
+	}
+
+	int origW = bitmap->GetWidth();
+	int origH = bitmap->GetHeight();
+	
+	if (origW <= 0 || origH <= 0)
+	{
+		delete bitmap;
+		return NULL;
+	}
+
+	int targetW = (maxWidth > 0) ? maxWidth : origW;
+	int targetH = (maxHeight > 0) ? maxHeight : origH;
+
+	Gdiplus::Bitmap* scaledBitmap = new Gdiplus::Bitmap(targetW, targetH, PixelFormat24bppRGB);
+	Gdiplus::Graphics graphics(scaledBitmap);
+	DWORD sysColor = GetSysColor(COLOR_3DFACE);
+	graphics.Clear(Gdiplus::Color(255, GetRValue(sysColor), GetGValue(sysColor), GetBValue(sysColor)));
+
+	graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+	
+	graphics.DrawImage(bitmap, 0, 0, targetW, targetH);
+
+	HBITMAP hBitmap = NULL;
+	if (scaledBitmap->GetHBITMAP(Gdiplus::Color(255, 255, 255), &hBitmap) != Gdiplus::Ok)
+	{
+		hBitmap = NULL;
+	}
+
+	delete scaledBitmap;
+	delete bitmap;
+
+	return hBitmap;
+}
+
+static intptr_t CALLBACK IPSDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	static ULONG_PTR gdiplusToken;
+	
+	switch (uMsg)
+	{
+		case WM_INITDIALOG:
+		{
+			Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+			Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+
+			g_nGame = (int)lParam;
+			
+			char title[256];
+			snprintf(title, sizeof(title), "%s - IPS 管理器", GetDriverGameTitle(g_nGame));
+			wchar_t *wtitle = win_wstring_from_utf8(title);
+			if (wtitle)
+			{
+				SetWindowText(hDlg, wtitle);
+				free(wtitle);
+			}
+
+			{
+				int savedLang = GetIPSLang();
+				if (savedLang < 0 || savedLang > 2) savedLang = 0;
+				SetIPSLangOverride(savedLang);
+			}
+			
+			HWND hTree = GetDlgItem(hDlg, IDC_IPS_TREE);
+			if (hTree)
+			{
+				TreeView_SetExtendedStyle(hTree, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
+				
+				int nParentIndex = -1;
+				if (DriverIsClone(g_nGame))
+					nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+				
+				std::map<std::string, HTREEITEM> categoryMap;
+
+				int count = GetPatchCount(g_nGame, nParentIndex);
+				for (int i = 0; i < count; i++)
+				{
+					const char* filename = GetPatchFilename(g_nGame, nParentIndex, i);
+					const char* title = GetPatchTitle(g_nGame, nParentIndex, i);
+					const char* category = GetPatchCategory(g_nGame, nParentIndex, i);
+					
+					if (filename)
+					{
+						HTREEITEM hParent = TVI_ROOT;
+						if (category && category[0])
+						{
+							auto it = categoryMap.find(category);
+							if (it == categoryMap.end())
+							{
+								wchar_t* wcategory = win_wstring_from_utf8(category);
+								if (wcategory)
+								{
+									TVINSERTSTRUCT tvisCat;
+									memset(&tvisCat, 0, sizeof(tvisCat));
+									tvisCat.hParent = TVI_ROOT;
+									tvisCat.hInsertAfter = TVI_LAST;
+									tvisCat.item.mask = TVIF_TEXT | TVIF_PARAM;
+									tvisCat.item.pszText = wcategory;
+									tvisCat.item.lParam = -1;
+									
+									hParent = TreeView_InsertItem(hTree, &tvisCat);
+									categoryMap[category] = hParent;
+									free(wcategory);
+								}
+							}
+							else
+							{
+								hParent = it->second;
+							}
+						}
+
+						wchar_t* wfilename = win_wstring_from_utf8(title ? title : filename);
+						if (wfilename)
+						{
+							TVINSERTSTRUCT tvis;
+							memset(&tvis, 0, sizeof(tvis));
+							tvis.hParent = hParent;
+							tvis.hInsertAfter = TVI_LAST;
+							tvis.item.mask = TVIF_TEXT | TVIF_PARAM;
+							tvis.item.pszText = wfilename;
+							tvis.item.lParam = (LPARAM)i;
+							
+							TreeView_InsertItem(hTree, &tvis);
+							free(wfilename);
+						}
+					}
+				}
+				
+				for (auto& kv : categoryMap)
+				{
+					TreeView_Expand(hTree, kv.second, TVE_EXPAND);
+				}
+			}
+			else
+			{
+				InitializeIPSUI(hDlg);
+			}
+			
+			HWND hLang = GetDlgItem(hDlg, IDC_IPS_LANG);
+			if (hLang)
+			{
+				ComboBox_AddString(hLang, L"简体中文");
+				ComboBox_AddString(hLang, L"繁體中文");
+				ComboBox_AddString(hLang, L"English");
+				ComboBox_SetCurSel(hLang, 0);
+
+				int savedLang = GetIPSLang();
+				if (savedLang < 0 || savedLang > 2) savedLang = 0;
+				ComboBox_SetCurSel(hLang, savedLang);
+				//SetIPSLangOverride(savedLang);
+			}
+			
+			HWND hRelation = GetDlgItem(hDlg, IDC_IPS_RELATION);
+			if (hRelation)
+			{
+				Button_SetCheck(hRelation, BST_CHECKED);
+			}
+			
+			CenterWindow(hDlg);
+			
+			{
+				int nParentIndex = -1;
+				if (DriverIsClone(g_nGame))
+					nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+				IPSLoadRelations(g_nGame, nParentIndex);
+				
+				PostMessage(hDlg, WM_USER + 100, 0, 0);
+			}
+			
+			return TRUE;
+		}
+		
+		case WM_USER + 100:
+		{
+			int nParentIndex = -1;
+			if (DriverIsClone(g_nGame))
+				nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+			
+			windows_options o;
+			LoadOptions(o, OPTIONS_GAME, g_nGame);
+			const char* ips_val = o.value(OPTION_IPS);
+			
+			if (ips_val && *ips_val)
+			{
+				std::set<std::string> enabled_patches;
+				std::string val_str = ips_val;
+				std::transform(val_str.begin(), val_str.end(), val_str.begin(), ::tolower);
+				
+				std::stringstream ss(val_str);
+				std::string item;
+				while (std::getline(ss, item, ','))
+				{
+					item.erase(0, item.find_first_not_of(" \t"));
+					item.erase(item.find_last_not_of(" \t") + 1);
+					if (!item.empty())
+						enabled_patches.insert(item);
+				}
+				
+				HWND hTree = GetDlgItem(hDlg, IDC_IPS_TREE);
+				if (hTree)
+				{
+					std::function<void(HTREEITEM)> restore_tree_state;
+					restore_tree_state = [&](HTREEITEM hRoot) {
+						HTREEITEM hCurrent = hRoot;
+						while (hCurrent)
+						{
+							TVITEM tvi;
+							tvi.hItem = hCurrent;
+							tvi.mask = TVIF_PARAM;
+							if (TreeView_GetItem(hTree, &tvi))
+							{
+								if (tvi.lParam >= 0)
+								{
+									int idx = (int)tvi.lParam;
+									const char* fname = GetPatchFilename(g_nGame, nParentIndex, idx);
+									if (fname)
+									{
+										std::string fname_lower = fname;
+										std::transform(fname_lower.begin(), fname_lower.end(), fname_lower.begin(), ::tolower);
+										
+										if (enabled_patches.find(fname_lower) != enabled_patches.end())
+										{
+											TreeView_SetCheckState(hTree, hCurrent, TRUE);
+											IPSSetPatchState(fname, true);
+										}
+									}
+								}
+								
+								HTREEITEM hChild = TreeView_GetChild(hTree, hCurrent);
+								if (hChild)
+									restore_tree_state(hChild);
+							}
+							hCurrent = TreeView_GetNextSibling(hTree, hCurrent);
+						}
+					};
+					
+					restore_tree_state(TreeView_GetRoot(hTree));
+					
+					HTREEITEM hCat = TreeView_GetRoot(hTree);
+					while (hCat)
+					{
+						TVITEM tviCat;
+						tviCat.mask = TVIF_PARAM;
+						tviCat.hItem = hCat;
+						if (TreeView_GetItem(hTree, &tviCat) && tviCat.lParam == -1)
+						{
+							BOOL allChecked = TRUE;
+							HTREEITEM hChild = TreeView_GetChild(hTree, hCat);
+							if (hChild)
+							{
+								while (hChild)
+								{
+									if (!TreeView_GetCheckState(hTree, hChild))
+										allChecked = FALSE;
+									hChild = TreeView_GetNextSibling(hTree, hChild);
+								}
+								TreeView_SetCheckState(hTree, hCat, allChecked);
+							}
+						}
+						hCat = TreeView_GetNextSibling(hTree, hCat);
+					}
+				}
+			}
+			return TRUE;
+		}
+		
+		case WM_NOTIFY:
+		{
+			LPNMHDR pnmh = (LPNMHDR)lParam;
+			if (pnmh->idFrom == IDC_IPS_TREE)
+			{
+				if (pnmh->code == TVN_SELCHANGED)
+				{
+					LPNMTREEVIEW pnmtv = (LPNMTREEVIEW)lParam;
+					int idx = (int)pnmtv->itemNew.lParam;
+					
+					int nParentIndex = -1;
+					if (DriverIsClone(g_nGame))
+						nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+					
+					const char* desc = GetPatchDesc(g_nGame, nParentIndex, idx);
+					HWND hDesc = GetDlgItem(hDlg, IDC_IPS_DESC);
+					if (hDesc)
+					{
+						if (desc)
+						{
+							wchar_t *wdesc = win_wstring_from_utf8(desc);
+							if (wdesc)
+							{
+								SendMessage(hDesc, EM_LIMITTEXT, 0, 0);
+								SetWindowText(hDesc, wdesc);
+								free(wdesc);
+							}
+						}
+						else
+						{
+							SetWindowText(hDesc, L"");
+						}
+					}
+					
+					HWND hSnap = GetDlgItem(hDlg, IDC_IPS_SNAP);
+					if (hSnap)
+					{
+						const char* img_path = GetPatchImagePath(g_nGame, nParentIndex, idx);
+						if (img_path && img_path[0])
+						{
+							wchar_t *wpath = win_wstring_from_utf8(img_path);
+							if (wpath)
+							{
+								RECT rcClient;
+								GetClientRect(hSnap, &rcClient);
+								HBITMAP hBmp = LoadImageFromFile(wpath, rcClient.right, rcClient.bottom);
+								if (hBmp)
+								{
+									HBITMAP hOldBmp = (HBITMAP)SendMessage(hSnap, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)hBmp);
+									if (hOldBmp)
+										DeleteObject(hOldBmp);
+								}
+								free(wpath);
+							}
+						}
+						else
+						{
+							RECT rcClient;
+							GetClientRect(hSnap, &rcClient);
+							int targetW = rcClient.right;
+							int targetH = rcClient.bottom;
+							
+							HBITMAP hSrcBmp = (HBITMAP)LoadImage(GetModuleHandle(NULL), MAKEINTRESOURCE(IDB_MAME_IPS), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
+							if (hSrcBmp && targetW > 0 && targetH > 0)
+							{
+								Gdiplus::Bitmap* srcBitmap = Gdiplus::Bitmap::FromHBITMAP(hSrcBmp, NULL);
+								if (srcBitmap && srcBitmap->GetLastStatus() == Gdiplus::Ok)
+								{
+									Gdiplus::Bitmap* scaledBitmap = new Gdiplus::Bitmap(targetW, targetH, PixelFormat24bppRGB);
+									Gdiplus::Graphics graphics(scaledBitmap);
+									DWORD sysColor = GetSysColor(COLOR_3DFACE);
+									graphics.Clear(Gdiplus::Color(255, GetRValue(sysColor), GetGValue(sysColor), GetBValue(sysColor)));
+									graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+									graphics.DrawImage(srcBitmap, 0, 0, targetW, targetH);
+									
+									HBITMAP hScaledBmp = NULL;
+									if (scaledBitmap->GetHBITMAP(Gdiplus::Color(255, 255, 255), &hScaledBmp) == Gdiplus::Ok && hScaledBmp)
+									{
+										HBITMAP hOldBmp = (HBITMAP)SendMessage(hSnap, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)hScaledBmp);
+										if (hOldBmp)
+											DeleteObject(hOldBmp);
+									}
+									delete scaledBitmap;
+									delete srcBitmap;
+								}
+								DeleteObject(hSrcBmp);
+							}
+							else if (hSrcBmp)
+							{
+								HBITMAP hOldBmp = (HBITMAP)SendMessage(hSnap, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)hSrcBmp);
+								if (hOldBmp)
+									DeleteObject(hOldBmp);
+							}
+							else
+							{
+								HBITMAP hOldBmp = (HBITMAP)SendMessage(hSnap, STM_SETIMAGE, IMAGE_BITMAP, (LPARAM)NULL);
+								if (hOldBmp)
+									DeleteObject(hOldBmp);
+							}
+						}
+					}
+				}
+				else if (pnmh->code == NM_CLICK)
+				{
+					TVHITTESTINFO ht = {0};
+					DWORD dwpos = GetMessagePos();
+					ht.pt.x = GET_X_LPARAM(dwpos);
+					ht.pt.y = GET_Y_LPARAM(dwpos);
+					MapWindowPoints(HWND_DESKTOP, pnmh->hwndFrom, &ht.pt, 1);
+					
+					TreeView_HitTest(pnmh->hwndFrom, &ht);
+					if (ht.flags & TVHT_ONITEMSTATEICON)
+					{
+						PostMessage(hDlg, WM_APP + 1, 0, (LPARAM)ht.hItem);
+					}
+				}
+			}
+			break;
+		}
+		
+		case WM_APP + 1:
+		{
+			HTREEITEM hItem = (HTREEITEM)lParam;
+			HWND hTree = GetDlgItem(hDlg, IDC_IPS_TREE);
+			HWND hRelation = GetDlgItem(hDlg, IDC_IPS_RELATION);
+			
+			if (hTree && hItem)
+			{
+				TVITEM tvi;
+				tvi.mask = TVIF_PARAM;
+				tvi.hItem = hItem;
+				if (TreeView_GetItem(hTree, &tvi))
+				{
+					int nParentIndex = -1;
+					if (DriverIsClone(g_nGame))
+						nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+					
+					BOOL checked = TreeView_GetCheckState(hTree, hItem);
+					
+					if (tvi.lParam == -1)
+					{
+						HTREEITEM hChild = TreeView_GetChild(hTree, hItem);
+						while (hChild)
+						{
+							TreeView_SetCheckState(hTree, hChild, checked);
+							
+							TVITEM tviChild;
+							tviChild.mask = TVIF_PARAM;
+							tviChild.hItem = hChild;
+							if (TreeView_GetItem(hTree, &tviChild) && tviChild.lParam >= 0)
+							{
+								const char* filename = GetPatchFilename(g_nGame, nParentIndex, (int)tviChild.lParam);
+								if (filename)
+									IPSSetPatchState(filename, checked ? true : false);
+							}
+							hChild = TreeView_GetNextSibling(hTree, hChild);
+						}
+					}
+					else
+					{
+						const char* filename = GetPatchFilename(g_nGame, nParentIndex, (int)tvi.lParam);
+						if (filename)
+						{
+							if (hRelation && Button_GetCheck(hRelation) == BST_CHECKED)
+							{
+								IPSSetPatchState(filename, checked ? true : false);
+								
+								std::function<void(HTREEITEM)> update_tree_state;
+								update_tree_state = [&](HTREEITEM hRoot) {
+									HTREEITEM hCurrent = hRoot;
+									while (hCurrent)
+									{
+										TVITEM tviCur;
+										tviCur.hItem = hCurrent;
+										tviCur.mask = TVIF_PARAM;
+										if (TreeView_GetItem(hTree, &tviCur))
+										{
+											if (tviCur.lParam >= 0)
+											{
+												const char* patchname = GetPatchFilename(g_nGame, nParentIndex, (int)tviCur.lParam);
+												if (patchname)
+												{
+													bool state = IPSGetPatchState(patchname);
+													TreeView_SetCheckState(hTree, hCurrent, state ? TRUE : FALSE);
+												}
+											}
+											
+											HTREEITEM hChild = TreeView_GetChild(hTree, hCurrent);
+											if (hChild)
+												update_tree_state(hChild);
+										}
+										hCurrent = TreeView_GetNextSibling(hTree, hCurrent);
+									}
+								};
+								
+								update_tree_state(TreeView_GetRoot(hTree));
+							}
+							else
+							{
+								IPSSetPatchState(filename, checked ? true : false);
+							}
+						}
+						
+						HTREEITEM hParent = TreeView_GetParent(hTree, hItem);
+						if (hParent)
+						{
+							TVITEM tviParent;
+							tviParent.mask = TVIF_PARAM;
+							tviParent.hItem = hParent;
+							if (TreeView_GetItem(hTree, &tviParent) && tviParent.lParam == -1)
+							{
+								BOOL allChecked = TRUE;
+								HTREEITEM hSibling = TreeView_GetChild(hTree, hParent);
+								while (hSibling)
+								{
+									if (!TreeView_GetCheckState(hTree, hSibling))
+										allChecked = FALSE;
+									hSibling = TreeView_GetNextSibling(hTree, hSibling);
+								}
+								
+								TreeView_SetCheckState(hTree, hParent, allChecked);
+							}
+						}
+					}
+				}
+			}
+			break;
+		}
+		
+		case WM_COMMAND:
+		{
+			WORD wID = LOWORD(wParam);
+			WORD wNotifyCode = HIWORD(wParam);
+			
+			switch (wID)
+			{
+				case IDC_IPS_LIST:
+					if (wNotifyCode == LBN_SELCHANGE)
+					{
+						IPSSelectionChange(hDlg, (HWND)lParam);
+					}
+					break;
+				
+				case IDC_IPS_LANG:
+					if (wNotifyCode == CBN_SELCHANGE)
+					{
+						HWND hLang = (HWND)lParam;
+						int idx = ComboBox_GetCurSel(hLang);
+						if (idx != CB_ERR)
+						{
+							SetIPSLangOverride(idx);
+
+							SetIPSLang(idx);
+							SaveInterface();
+														
+							HWND hTree = GetDlgItem(hDlg, IDC_IPS_TREE);
+							if (hTree)
+							{
+								TreeView_DeleteAllItems(hTree);
+								
+								int nParentIndex = -1;
+								if (DriverIsClone(g_nGame))
+									nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+									
+								std::map<std::string, HTREEITEM> categoryMap;
+								int count = GetPatchCount(g_nGame, nParentIndex);
+								
+								for (int i = 0; i < count; i++)
+								{
+									const char* filename = GetPatchFilename(g_nGame, nParentIndex, i);
+									const char* title = GetPatchTitle(g_nGame, nParentIndex, i);
+									const char* category = GetPatchCategory(g_nGame, nParentIndex, i);
+									
+									if (filename)
+									{
+										HTREEITEM hParent = TVI_ROOT;
+										if (category && category[0])
+										{
+											auto it = categoryMap.find(category);
+											if (it == categoryMap.end())
+											{
+												wchar_t* wcategory = win_wstring_from_utf8(category);
+												if (wcategory)
+												{
+													TVINSERTSTRUCT tvisCat;
+													memset(&tvisCat, 0, sizeof(tvisCat));
+													tvisCat.hParent = TVI_ROOT;
+													tvisCat.hInsertAfter = TVI_LAST;
+													tvisCat.item.mask = TVIF_TEXT | TVIF_PARAM;
+													tvisCat.item.pszText = wcategory;
+													tvisCat.item.lParam = -1; 
+													
+													hParent = TreeView_InsertItem(hTree, &tvisCat);
+													categoryMap[category] = hParent;
+													free(wcategory);
+													
+													TreeView_Expand(hTree, hParent, TVE_EXPAND);
+												}
+											}
+											else
+											{
+												hParent = it->second;
+											}
+										}
+
+										wchar_t* wfilename = win_wstring_from_utf8(title ? title : filename);
+										if (wfilename)
+										{
+											TVINSERTSTRUCT tvis;
+											memset(&tvis, 0, sizeof(tvis));
+											tvis.hParent = hParent;
+											tvis.hInsertAfter = TVI_LAST;
+											tvis.item.mask = TVIF_TEXT | TVIF_PARAM;
+											tvis.item.pszText = wfilename;
+											tvis.item.lParam = (LPARAM)i;
+											
+											HTREEITEM hItem = TreeView_InsertItem(hTree, &tvis);
+											free(wfilename);
+											
+											// Restore check state
+											if (IPSGetPatchState(filename))
+											{
+												TreeView_SetCheckState(hTree, hItem, TRUE);
+											}
+										}
+									}
+								}
+								
+								for (auto& kv : categoryMap)
+								{
+									HTREEITEM hCat = kv.second;
+									BOOL allChecked = TRUE;
+									HTREEITEM hChild = TreeView_GetChild(hTree, hCat);
+									while (hChild)
+									{
+										if (!TreeView_GetCheckState(hTree, hChild))
+											allChecked = FALSE;
+										hChild = TreeView_GetNextSibling(hTree, hChild);
+									}
+									TreeView_SetCheckState(hTree, hCat, allChecked);
+								}
+								
+								std::function<HTREEITEM(HTREEITEM)> find_first_checked_lang;
+								find_first_checked_lang = [&](HTREEITEM hRoot) -> HTREEITEM {
+									HTREEITEM hCurrent = hRoot;
+									while (hCurrent)
+									{
+										TVITEM tviCheck;
+										tviCheck.mask = TVIF_PARAM;
+										tviCheck.hItem = hCurrent;
+										if (TreeView_GetItem(hTree, &tviCheck))
+										{
+											if (tviCheck.lParam >= 0 && TreeView_GetCheckState(hTree, hCurrent))
+												return hCurrent;
+											
+											HTREEITEM hChild = TreeView_GetChild(hTree, hCurrent);
+											if (hChild)
+											{
+												HTREEITEM found = find_first_checked_lang(hChild);
+												if (found)
+													return found;
+											}
+										}
+										hCurrent = TreeView_GetNextSibling(hTree, hCurrent);
+									}
+									return nullptr;
+								};
+								
+								HTREEITEM hFirstChecked = find_first_checked_lang(TreeView_GetRoot(hTree));
+								if (hFirstChecked)
+									TreeView_SelectItem(hTree, hFirstChecked);
+							}
+						}
+					}
+					break;
+				
+				case IDC_IPS_CLEAR:
+				{
+					HWND hTree = GetDlgItem(hDlg, IDC_IPS_TREE);
+					if (hTree)
+					{
+						int nParentIndex = -1;
+						if (DriverIsClone(g_nGame))
+							nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+
+						std::function<void(HTREEITEM)> clear_all_checkboxes;
+						clear_all_checkboxes = [&](HTREEITEM hRoot) {
+							HTREEITEM hItem = hRoot;
+							while (hItem)
+							{
+								TreeView_SetCheckState(hTree, hItem, FALSE);
+
+								TVITEM tvi;
+								tvi.mask = TVIF_PARAM;
+								tvi.hItem = hItem;
+								if (TreeView_GetItem(hTree, &tvi) && tvi.lParam >= 0)
+								{
+									const char* filename = GetPatchFilename(g_nGame, nParentIndex, (int)tvi.lParam);
+									if (filename)
+										IPSSetPatchState(filename, false);
+								}
+								
+								HTREEITEM hChild = TreeView_GetChild(hTree, hItem);
+								if (hChild)
+									clear_all_checkboxes(hChild);
+								
+								hItem = TreeView_GetNextSibling(hTree, hItem);
+							}
+						};
+						
+						clear_all_checkboxes(TreeView_GetRoot(hTree));
+					}
+					HWND hList = GetDlgItem(hDlg, IDC_IPS_LIST);
+					if (hList)
+					{
+						ListBox_SetSel(hList, FALSE, -1);
+					}
+					break;
+				}
+				
+				case IDOK:
+				{
+					std::string ips_value;
+					
+					HWND hTree = GetDlgItem(hDlg, IDC_IPS_TREE);
+					if (hTree)
+					{
+						int nParentIndex = -1;
+						if (DriverIsClone(g_nGame))
+							nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+						
+						std::function<void(HTREEITEM)> collect_checked;
+						collect_checked = [&](HTREEITEM hRoot) {
+							HTREEITEM hItem = hRoot;
+							while (hItem)
+							{
+								TVITEM tvi;
+								tvi.hItem = hItem;
+								tvi.mask = TVIF_PARAM;
+								if (TreeView_GetItem(hTree, &tvi))
+								{
+									if (tvi.lParam >= 0 && TreeView_GetCheckState(hTree, hItem))
+									{
+										int idx = (int)tvi.lParam;
+										const char* filename = GetPatchFilename(g_nGame, nParentIndex, idx);
+										if (filename)
+										{
+											if (!ips_value.empty()) ips_value += ",";
+											ips_value += filename;
+										}
+									}
+									
+									HTREEITEM hChild = TreeView_GetChild(hTree, hItem);
+									if (hChild)
+										collect_checked(hChild);
+								}
+								hItem = TreeView_GetNextSibling(hTree, hItem);
+							}
+						};
+						
+						collect_checked(TreeView_GetRoot(hTree));
+					}
+					else
+					{
+						HWND hList = GetDlgItem(hDlg, IDC_IPS_LIST);
+						if (hList)
+						{
+							int count = ListBox_GetCount(hList);
+							for (int i = 0; i < count; i++)
+							{
+								if (ListBox_GetSel(hList, i))
+								{
+									wchar_t wbuf[256];
+									ListBox_GetText(hList, i, wbuf);
+									char* filename = win_utf8_from_wstring(wbuf);
+									if (filename)
+									{
+										if (!ips_value.empty()) ips_value += ",";
+										ips_value += filename;
+										free(filename);
+									}
+								}
+							}
+						}
+					}
+					
+					windows_options o;
+					LoadOptions(o, OPTIONS_GAME, g_nGame);
+					o.set_value(OPTION_IPS, ips_value.c_str(), OPTION_PRIORITY_CMDLINE);
+					SaveOptions(OPTIONS_GAME, o, g_nGame);
+					
+					EndDialog(hDlg, IDOK);
+					return TRUE;
+				}
+				
+				case IDCANCEL:
+					EndDialog(hDlg, IDCANCEL);
+					return TRUE;
+			}
+			break;
+		}
+		
+		case WM_CLOSE:
+			EndDialog(hDlg, IDCANCEL);
+			return TRUE;
+		case WM_DESTROY:
+			if (gdiplusToken)
+				Gdiplus::GdiplusShutdown(gdiplusToken);
+			return TRUE;
+	}
+	return FALSE;
+}
+
+void ShowIPSDialog(HINSTANCE hInst, HWND hWnd, int game_num)
+{
+	DialogBoxParam(hInst, MAKEINTRESOURCE(IDD_PROP_IPS), hWnd, IPSDialogProc, (LPARAM)game_num);
+}
+/**************************************************/
+
+/*********************************************************************
+ * Local Functions
+ *********************************************************************/
+
+/* Build CPU info string */
+static char *GameInfoCPU(int nIndex)
+{
+	machine_config config(driver_list::driver(nIndex), MameUIGlobal());
+	execute_interface_enumerator cpuiter(config.root_device());
+	std::unordered_set<std::string> exectags;
+	static char buffer[1024];
+
+	memset(&buffer, 0, sizeof(buffer));
+
+	for (device_execute_interface &exec : cpuiter)
+	{
+		if (!exectags.insert(exec.device().tag()).second)
+			continue;
+
+		char temp[300];
+		int count = 1;
+		int clock = exec.device().clock();
+		const char *name = exec.device().name();
+
+		for (device_execute_interface &scan : cpuiter)
+		{
+			if (exec.device().type() == scan.device().type() && strcmp(name, scan.device().name()) == 0 && clock == scan.device().clock())
+				if (exectags.insert(scan.device().tag()).second)
+					count++;
+		}
+
+		if (count > 1)
+		{
+			snprintf(temp, std::size(temp), "%d x ", count);
+			strcat(buffer, temp);
+		}
+
+		if (clock >= 1000000)
+			snprintf(temp, std::size(temp), "%s %d.%06d MHz\r\n", name, clock / 1000000, clock % 1000000);
+		else
+			snprintf(temp, std::size(temp), "%s %d.%03d kHz\r\n", name, clock / 1000, clock % 1000);
+
+		strcat(buffer, temp);
+	}
+
+	return buffer;
+}
+
+/* Build Sound system info string */
+static char *GameInfoSound(int nIndex)
+{
+	machine_config config(driver_list::driver(nIndex), MameUIGlobal());
+	sound_interface_enumerator sounditer(config.root_device());
+	std::unordered_set<std::string> soundtags;
+	static char buffer[1024];
+
+	memset(&buffer, 0, sizeof(buffer));
+
+	for (device_sound_interface &sound : sounditer)
+	{
+		if (!soundtags.insert(sound.device().tag()).second)
+				continue;
+
+		char temp[300];
+		int count = 1;
+		int clock = sound.device().clock();
+		const char *name = sound.device().name();
+
+		for (device_sound_interface &scan : sounditer)
+		{
+			if (sound.device().type() == scan.device().type() && strcmp(name, scan.device().name()) == 0 && clock == scan.device().clock())
+				if (soundtags.insert(scan.device().tag()).second)
+					count++;
+		}
+
+		if (count > 1)
+		{
+			snprintf(temp, std::size(temp), "%d x ", count);
+			strcat(buffer, temp);
+		}
+
+		strcat(buffer, name);
+
+		if (clock)
+		{
+			if (clock >= 1000000)
+				snprintf(temp, std::size(temp), " %d.%06d MHz", clock / 1000000, clock % 1000000);
+			else
+				snprintf(temp, std::size(temp), " %d.%03d kHz", clock / 1000, clock % 1000);
+
+			strcat(buffer, temp);
+		}
+
+		strcat(buffer, "\r\n");
+	}
+
+	return buffer;
+}
+
+/* Build Display info string */
+static char *GameInfoScreen(int nIndex)
+{
+	machine_config config(driver_list::driver(nIndex), MameUIGlobal());
+	static char buffer[1024];
+
+	memset(&buffer, 0, sizeof(buffer));
+
+	if (DriverIsVector(nIndex))
+	{
+		if (DriverIsVertical(nIndex))
+			strcpy(buffer, "Vector (V)");
+		else
+			strcpy(buffer, "Vector (H)");
+	}
+	else
+	{
+		screen_device_enumerator screeniter(config.root_device());
+		int scrcount = screeniter.count();
+
+		if (scrcount == 0)
+			strcpy(buffer, "Screenless");
+		else
+		{
+			for (screen_device &screen : screeniter)
+			{
+				const rectangle &visarea = screen.visible_area();
+				char tmpbuf[256];
+
+				if (DriverIsVertical(nIndex))
+					snprintf(tmpbuf, std::size(tmpbuf), "%d x %d (V) %f Hz\r\n", visarea.width(), visarea.height(), ATTOSECONDS_TO_HZ(screen.refresh_attoseconds()));
+				else
+					snprintf(tmpbuf, std::size(tmpbuf), "%d x %d (H) %f Hz\r\n", visarea.width(), visarea.height(), ATTOSECONDS_TO_HZ(screen.refresh_attoseconds()));
+
+				strcat(buffer, tmpbuf);
+			}
+		}
+	}
+
+	return buffer;
+}
+
+/* Build game status string */
+static char *GameInfoStatus(int driver_index)
+{
+	static char buffer[1024];
+	memset(&buffer, 0, sizeof(buffer));
+	if (driver_index < 0)
+		return buffer;
+
+	uint32_t cache = GetDriverCacheLower(driver_index);
+
+	//Just show the emulation flags
+	if (DriverIsBroken(driver_index))
+	{
+		strcpy(buffer, "无法运行");
+		strcat(buffer, "\r\n");
+		strcat(buffer, "游戏无法正常工作");
+
+		if (BIT(cache, 22))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "游戏保护没有完全被模拟");
+		}
+
+		if (BIT(cache, 14))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "游戏有机械部件");
+		}
+
+		status_color = 1;
+		return buffer;
+	}
+
+	if (DriverIsImperfect(driver_index))
+	{
+		strcpy(buffer, "可以运行但存在问题");
+		status_color = 2;
+
+		if (BIT(cache, 21))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "颜色完全错误");
+		}
+
+		if (BIT(cache, 20))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "颜色不是 100% 准确的");
+		}
+
+		if (BIT(cache, 18))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "视频模拟并非 100% 准确");
+		}
+
+		if (BIT(cache, 17))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "游戏缺少声音");
+		}
+
+		if (BIT(cache, 16))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "声音模拟不是 100% 准确的");
+		}
+
+		if (BIT(cache, 15))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "游戏从未完成");
+		}
+
+		if (BIT(cache, 13))
+		{
+			strcat(buffer, "\r\n");
+			strcat(buffer, "游戏没有声音硬件");
+		}
+
+		return buffer;
+	}
+	else
+	{
+		strcpy(buffer, "可以运行");
+		status_color = 0;
+		return buffer;
+	}
+}
+
+/* Build game manufacturer string */
+static char *GameInfoManufactured(int nIndex)
+{
+	static char buffer[1024];
+
+	memset(&buffer, 0, sizeof(buffer));
+	snprintf(buffer, std::size(buffer), "%s %s", GetDriverGameYear(nIndex), GetDriverGameManufacturer(nIndex));
+	return buffer;
+}
+
+/* Build Game title string */
+static char *GameInfoTitle(OPTIONS_TYPE opt_type, int nIndex)
+{
+	static char buffer[1024];
+
+	memset(&buffer, 0, sizeof(buffer));
+
+	if (OPTIONS_GLOBAL == opt_type)
+		strcpy(buffer, "全局选项\r\n所有游戏使用的默认选项");
+	else if (OPTIONS_RASTER == opt_type)
+		strcpy(buffer, "光栅选项\r\n 所有光栅游戏使用的默认选项");
+	else if (OPTIONS_VECTOR == opt_type)
+		strcpy(buffer, "矢量选项\r\n 所有矢量游戏使用的默认选项");
+	else if (OPTIONS_VERTICAL == opt_type)
+		strcpy(buffer, "垂直选项\r\n 所有垂直方向游戏使用的默认选项");
+	else if (OPTIONS_HORIZONTAL == opt_type)
+		strcpy(buffer, "水平选项\r\n 所有水平方向游戏使用的默认选项");
+	else if (OPTIONS_SOURCE == opt_type)
+		strcpy(buffer, "驱动程序选项\r\n驱动程序中所有游戏使用的默认选项");
+	else
+// 缘来是你
+/************************** 中文列表 ****************************/
+		snprintf(buffer, std::size(buffer), "%s - \"%s\"", 
+             GetDescriptionByIndex(nIndex, GetUsechineseList()), 
+             GetGameNameByIndex(nIndex, GetUsechineseList()));
+/**************************************************************/
+	return buffer;
+}
+
+/* Build game clone infromation string */
+static char *GameInfoCloneOf(int nIndex)
+{
+	static char buffer[1024];
+
+	memset(&buffer, 0, sizeof(buffer));
+
+	if (DriverIsClone(nIndex))
+	{
+// 缘来是你
+/****************************** 中文列表 ******************************/
+    int nParentIndex = GetParentIndex(&driver_list::driver(nIndex));
+    snprintf(buffer, std::size(buffer), "%s - \"%s\"", 
+             GetDescriptionByIndex(nParentIndex, GetUsechineseList()), 
+             GetGameNameByIndex(nParentIndex, GetUsechineseList()));
+/*********************************************************************/
+	}
+
+	return buffer;
+}
+
+static char *GameInfoSaveState(int driver_index)
+{
+	static char buffer[1024];
+
+	memset(&buffer, 0, sizeof(buffer));
+
+	if (DriverSupportsSaveState(driver_index))
+		strcpy(buffer, "支持");
+	else
+		strcpy(buffer, "不支持");
+
+	return buffer;
+}
+
+/* Display Tree Sheet */
+static void UpdateSheetCaption(HWND hWnd)
+{
+	PAINTSTRUCT ps;
+	HRGN hRgn;
+	RECT rect, rc;
+	wchar_t szText[256];
+
+	memcpy(&rect, &rcTabCaption, sizeof(RECT));
+	BeginPaint (hWnd, &ps);
+	hDC = ps.hdc;
+	hRgn = CreateRectRgn(rect.left, rect.top, rect.right - 2, rect.bottom);
+	SelectClipRgn(hDC, hRgn);
+	hBrush = CreateSolidBrush(RGB(127, 127, 127));
+	FillRect(hDC, &rect, hBrush);
+	DeleteObject(hBrush);
+	int i = GetSheetPageTreeCurSelText(szText, std::size(szText));
+
+	if (i > 0)
+	{
+		HFONT hFontCaption = CreateFont(-16, 0,		// height, width
+			0, 										// angle of escapement
+			0,										// base-line orientation angle
+			700,									// font weight
+			0, 0, 0, 								// italic, underline, strikeout
+			0,										// character set identifier
+			3,										// output precision
+			2,										// clipping precision
+			2,										// output quality
+			34,										// pitch and family
+			TEXT("Arial"));							// typeface name
+
+		HFONT hOldFont = (HFONT)SelectObject(hDC, hFontCaption);
+		SetTextColor(hDC, RGB(255, 255, 255));
+		SetBkMode(hDC, TRANSPARENT);
+		memcpy(&rc, &rect, sizeof(RECT));
+		rc.left += 4;
+		DrawText(hDC, szText, _tcslen(szText), &rc, DT_SINGLELINE | DT_LEFT | DT_VCENTER);
+		SelectObject(hDC, hOldFont);
+		DeleteObject(hFontCaption);
+	}
+
+	SelectClipRgn(hDC, NULL);
+	DeleteObject(hRgn);
+	rect.left = SHEET_TREE_WIDTH + 15;
+	rect.top = 8;
+	rect.right = rcTabCaption.right - 1;
+	rect.bottom = rcTabCtrl.bottom + 4;
+	hRgn = CreateRectRgn(rect.left, rect.top, rect.right, rect.bottom);
+	SelectClipRgn(hDC, hRgn);
+	hBrush = CreateSolidBrush(RGB(127, 127, 127));
+	FrameRect(hDC, &rect, hBrush);
+	DeleteObject(hBrush);
+	SelectClipRgn(hDC, NULL);
+	DeleteObject(hRgn);
+	EndPaint (hWnd, &ps);
+	return;
+}
+
+static LRESULT CALLBACK NewSheetWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	bool bHandled = false;
+	TVITEM item;
+
+	switch (uMsg)
+	{
+		case WM_PAINT:
+			UpdateSheetCaption(hWnd);
+			bHandled = true;
+			break;
+
+		case WM_NOTIFY:
+			switch (((NMHDR *)lParam)->code)
+			{
+				case TVN_SELCHANGING:
+					if ((bPageTreeSelChangedActive == false) && (g_nFirstInitPropertySheet == 0))
+					{
+						NMTREEVIEW* pTvn = (NMTREEVIEW*)lParam;
+						bPageTreeSelChangedActive = true;
+
+						item.hItem = pTvn->itemNew.hItem;
+						item.mask = TVIF_PARAM;
+
+						(void)TreeView_GetItem(hSheetTreeCtrl, &item);
+						int nPage = (int)item.lParam;
+
+						if (nPage >= 0)
+							PropSheet_SetCurSel(hWnd, 0, nPage);
+
+						bPageTreeSelChangedActive = false;
+						bHandled = true;
+					}
+					break;
+
+				case TVN_SELCHANGED:
+					InvalidateRect(hWnd, &rcTabCaption, false);
+					bHandled = true;
+					break;
+			}
+
+			break;
+
+		case WM_DESTROY:
+			if (hSheetTreeCtrl != NULL)
+			{
+				DestroyWindow(hSheetTreeCtrl);
+				hSheetTreeCtrl = NULL;
+			}
+
+			if (pfnOldSheetProc)
+				SetWindowLongPtr(hWnd, GWLP_WNDPROC, (LONG_PTR)pfnOldSheetProc);
+
+			break;
+	}
+
+	if ((bHandled == false) && pfnOldSheetProc)
+		return CallWindowProc(pfnOldSheetProc, hWnd, uMsg, wParam, lParam);
+
+	return false;
+}
+
+static void AdjustChildWindows(HWND hWnd)
+{
+	wchar_t szClass[128];
+
+	GetClassName(hWnd, szClass, std::size(szClass));
+
+	if (!_tcscmp(szClass, WC_BUTTON))
+	{
+		DWORD dwStyle = GetWindowLong(hWnd, GWL_STYLE);
+
+		if (((dwStyle & BS_GROUPBOX) == BS_GROUPBOX) && (dwStyle & WS_TABSTOP))
+			SetWindowLong(hWnd, GWL_STYLE, (dwStyle & ~WS_TABSTOP));
+	}
+}
+
+static void AdjustPropertySheetChildWindows(HWND hWnd)
+{
+	HWND hChild = GetWindow(hWnd, GW_CHILD);
+
+	while (hChild)
+	{
+		hChild = GetNextWindow(hChild, GW_HWNDNEXT);
+	}
+}
+
+static void MovePropertySheetChildWindows(HWND hWnd, int nDx, int nDy)
+{
+	HWND hChild = GetWindow(hWnd, GW_CHILD);
+
+	while (hChild)
+	{
+		GetWindowRect(hChild, &rcChild);
+		OffsetRect(&rcChild, nDx, nDy);
+		ScreenToClient(hWnd, (LPPOINT)&rcChild);
+		ScreenToClient(hWnd, ((LPPOINT)&rcChild) + 1);
+		AdjustChildWindows(hChild);
+		MoveWindow(hChild, rcChild.left, rcChild.top, rcChild.right - rcChild.left, rcChild.bottom - rcChild.top, true);
+		hChild = GetNextWindow(hChild, GW_HWNDNEXT);
+	}
+}
+
+static HTREEITEM GetSheetPageTreeItem(int nPage)
+{
+	TVITEM item;
+
+	if (hSheetTreeCtrl == NULL)
+		return NULL;
+
+	HTREEITEM hItem = TreeView_GetRoot(hSheetTreeCtrl);
+
+	while (hItem)
+	{
+		item.hItem = hItem;
+		item.mask = TVIF_PARAM;
+		(void)TreeView_GetItem(hSheetTreeCtrl, &item);
+		int nTreePage = (int)item.lParam;
+
+		if (nTreePage == nPage)
+			return hItem;
+
+		hItem = TreeView_GetNextSibling(hSheetTreeCtrl, hItem);
+	}
+
+	return NULL;
+}
+
+static int GetSheetPageTreeCurSelText(wchar_t* lpszText, int iBufSize)
+{
+	TVITEM item;
+
+	lpszText[0] = 0;
+
+	if (hSheetTreeCtrl == NULL)
+		return -1;
+
+	HTREEITEM hItem = TreeView_GetSelection(hSheetTreeCtrl);
+
+	if (hItem == NULL)
+		return -1;
+
+	item.hItem = hItem;
+	item.mask = TVIF_TEXT;
+	item.pszText = lpszText;
+	item.cchTextMax = iBufSize;
+
+	(void)TreeView_GetItem(hSheetTreeCtrl, &item);
+	return _tcslen(lpszText);
+}
+
+static void ModifyPropertySheetForTreeSheet(HWND hPageDlg)
+{
+	RECT rectSheet, rectTree;
+	LONG_PTR prevProc;
+	TCITEM item;
+	HTREEITEM hItem;
+	int nPage = 0;
+
+	if (g_nFirstInitPropertySheet == 0)
+	{
+		AdjustPropertySheetChildWindows(hPageDlg);
+		return;
+	}
+
+	HWND hWnd = GetParent(hPageDlg);
+
+	if (!hWnd)
+		return;
+
+	prevProc = GetWindowLongPtr(hWnd, GWLP_WNDPROC);
+	pfnOldSheetProc = (WNDPROC)prevProc;
+	SetWindowLongPtr(hWnd, GWLP_WNDPROC, (LONG_PTR)NewSheetWndProc);
+	HWND hTabWnd = PropSheet_GetTabControl(hWnd);
+
+	if (!hTabWnd)
+		return;
+
+	DWORD tabStyle = (GetWindowLong(hTabWnd, GWL_STYLE) & ~TCS_MULTILINE);
+	SetWindowLong(hTabWnd, GWL_STYLE, tabStyle | TCS_SINGLELINE);
+	ShowWindow(hTabWnd, SW_HIDE);
+	EnableWindow(hTabWnd, false);
+	GetWindowRect(hTabWnd, &rcTabCtrl);
+	ScreenToClient(hTabWnd, (LPPOINT)&rcTabCtrl);
+	ScreenToClient(hTabWnd, ((LPPOINT)&rcTabCtrl) + 1);
+	GetWindowRect(hWnd, &rectSheet);
+	rectSheet.right += SHEET_TREE_WIDTH + 5;
+	SetWindowPos(hWnd, HWND_TOP, 0, 0, rectSheet.right - rectSheet.left, rectSheet.bottom - rectSheet.top, SWP_NOZORDER | SWP_NOMOVE);
+	CenterWindow(hWnd);
+	MovePropertySheetChildWindows(hWnd, SHEET_TREE_WIDTH + 6, 0);
+
+	if (hSheetTreeCtrl != NULL)
+	{
+		DestroyWindow(hSheetTreeCtrl);
+		hSheetTreeCtrl = NULL;
+	}
+
+	memset(&rectTree, 0, sizeof(RECT));
+	HWND hTempTab = CreateWindowEx(0, WC_TABCONTROL, NULL, WS_CHILD | WS_CLIPSIBLINGS,
+		rectTree.left, rectTree.top, rectTree.right - rectTree.left, rectTree.bottom - rectTree.top, hWnd, (HMENU)0x1234, hSheetInstance, NULL);
+
+	item.mask = TCIF_TEXT;
+	item.iImage = 0;
+	item.lParam = 0;
+	item.pszText = (wchar_t*)TEXT("");
+
+	(void)TabCtrl_InsertItem(hTempTab, 0, &item);
+	(void)TabCtrl_GetItemRect(hTempTab, 0, &rcTabCaption);
+	nCaptionHeight = (rcTabCaption.bottom - rcTabCaption.top);
+	rcTabCaption.left = rcTabCtrl.left + SHEET_TREE_WIDTH + 16;
+	rcTabCaption.top = 8;
+	rcTabCaption.right = rcTabCaption.left + (rcTabCtrl.right - rcTabCtrl.left - 6);
+	rcTabCaption.bottom = rcTabCaption.top + nCaptionHeight;
+	DestroyWindow(hTempTab);
+	rectTree.left = rcTabCtrl.left + 8;
+	rectTree.top = rcTabCtrl.top  + 8;
+	rectTree.right = rcTabCtrl.left + SHEET_TREE_WIDTH + 2;
+	rectTree.bottom = rcTabCtrl.bottom + 4;
+	hSheetTreeCtrl = CreateWindowEx(WS_EX_CLIENTEDGE | WS_EX_NOPARENTNOTIFY, WC_TREEVIEW, NULL,
+		WS_TABSTOP | WS_CHILD | WS_VISIBLE | TVS_SHOWSELALWAYS | TVS_FULLROWSELECT | TVS_TRACKSELECT,
+		rectTree.left, rectTree.top, rectTree.right - rectTree.left, rectTree.bottom - rectTree.top,
+		hWnd, (HMENU)0x7EEE, hSheetInstance, NULL);
+
+	if (IsWindowsSevenOrHigher())
+		SendMessage(hSheetTreeCtrl, TVM_SETEXTENDEDSTYLE, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
+
+	SetWindowTheme(hSheetTreeCtrl, L"Explorer", NULL);
+	(void)TreeView_SetItemHeight(hSheetTreeCtrl, 34);
+
+	if (hSheetTreeCtrl == NULL)
+	{
+		DWORD dwError = GetLastError();
+		ErrorMessageBox("PropertySheet TreeCtrl creation error %d %X", (int)dwError, (int)dwError);
+	}
+
+	HFONT hTreeSheetFont = CreateFont(-11, 0, 0, 0, 400, 0, 0, 0, 0, 3, 2, 1, 34, TEXT("Verdana"));
+	SetWindowFont(hSheetTreeCtrl, hTreeSheetFont, true);
+	(void)TreeView_DeleteAllItems(hSheetTreeCtrl);
+	int nPageCount = TabCtrl_GetItemCount(hTabWnd);
+	HIMAGELIST hTreeList = ImageList_Create(32, 32, ILC_COLORDDB | ILC_MASK, nPageCount, 0);
+
+	for (int i = 0; i < nPageCount; i++)
+	{
+		HICON hIconList = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_DISPLAYSHEET + i));
+		ImageList_AddIcon(hTreeList, hIconList);
+	}
+
+	(void)TreeView_SetImageList(hSheetTreeCtrl, hTreeList, TVSIL_NORMAL);
+
+	for (nPage = 0; nPage < nPageCount; nPage++)
+	{
+		wchar_t szText[256];
+		TCITEM ti;
+		TVINSERTSTRUCT tvis;
+		LPTVITEM lpTvItem;
+
+		// Get title and image of the page
+		memset(&ti, 0, sizeof(TCITEM));
+		ti.mask = TCIF_TEXT | TCIF_IMAGE;
+		ti.cchTextMax = sizeof(szText);
+		ti.pszText = szText;
+
+		(void)TabCtrl_GetItem(hTabWnd, nPage, &ti);
+		lpTvItem = &tvis.item;
+
+		// Create an item in the tree for the page
+		tvis.hParent = TVI_ROOT;
+		tvis.hInsertAfter = TVI_LAST;
+		lpTvItem->mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+		lpTvItem->pszText = szText;
+		lpTvItem->iImage = nPage;
+		lpTvItem->iSelectedImage = nPage;
+		lpTvItem->state = 0;
+		lpTvItem->stateMask = 0;
+		lpTvItem->lParam = (LPARAM)NULL;
+
+		// insert Item
+		hItem = TreeView_InsertItem(hSheetTreeCtrl, &tvis);
+
+		if (hItem)
+		{
+			TVITEM item;
+
+			item.hItem = hItem;
+			item.mask = TVIF_PARAM;
+			item.pszText = NULL;
+			item.iImage = 0;
+			item.iSelectedImage = 0;
+			item.state = 0;
+			item.stateMask = 0;
+			item.lParam = nPage;
+
+			(void)TreeView_SetItem(hSheetTreeCtrl, &item);
+		}
+	}
+
+	nPage = TabCtrl_GetCurSel(hTabWnd);
+
+	if (nPage != -1)
+	{
+		hItem = GetSheetPageTreeItem(nPage);
+
+		if (hItem)
+			(void)TreeView_SelectItem(hSheetTreeCtrl, hItem);
+	}
+
+	g_nFirstInitPropertySheet = 0;
+}
+
+/* Handle the information property page */
+intptr_t CALLBACK GamePropertiesDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+		case WM_INITDIALOG:
+		{
+			char tmp[64];
+			int index = lParam;
+			CenterWindow(hDlg);
+			hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_MAMEUI_ICON));
+			SendMessage(hDlg, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+			hBrushDlg = CreateSolidBrush(RGB(240, 240, 240));
+// 缘来是你 
+/********************************************** 中文列表 ******************************************************************/
+
+			snprintf(tmp, std::size(tmp), "\"%s\" 的信息", GetDescriptionByIndex(index, GetUsechineseList()));
+			winui_set_window_text_utf8(hDlg, tmp);
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_TITLE), GetDescriptionByIndex(index, GetUsechineseList()));
+
+/*************************************************************************************************************************/
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_MANUFACTURED), GameInfoManufactured(index));
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_STATUS), GameInfoStatus(index));
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_CPU), GameInfoCPU(index));
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_SOUND), GameInfoSound(index));
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_SCREEN), GameInfoScreen(index));
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_CLONEOF), GameInfoCloneOf(index));
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_SOURCE), GetDriverFileName(index));
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_SAVESTATE), GameInfoSaveState(index));
+
+			if (DriverIsClone(index))
+				ShowWindow(GetDlgItem(hDlg, IDC_PROP_CLONEOF_TEXT), SW_SHOW);
+			else
+				ShowWindow(GetDlgItem(hDlg, IDC_PROP_CLONEOF_TEXT), SW_HIDE);
+
+			ShowWindow(hDlg, SW_SHOW);
+			return true;
+		}
+
+		case WM_CTLCOLORDLG:
+			return (LRESULT) hBrushDlg;
+
+		case WM_CTLCOLORSTATIC:
+		case WM_CTLCOLORBTN:
+			hDC = (HDC)wParam;
+			SetBkMode(hDC, TRANSPARENT);
+			SetTextColor(hDC, GetSysColor(COLOR_WINDOWTEXT));
+
+			if ((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_STATUS))
+			{
+				if (status_color == 0)
+					SetTextColor(hDC, RGB(34, 177, 76));
+				else if (status_color == 1)
+					SetTextColor(hDC, RGB(237, 28, 36));
+				else
+					SetTextColor(hDC, RGB(198, 188, 0));
+			}
+
+			if (((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_TITLE)) ||
+				((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_MANUFACTURED)) ||
+				((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_CPU)) ||
+				((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_SOUND)) ||
+				((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_SCREEN)) ||
+				((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_CLONEOF)) ||
+				((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_SOURCE)) ||
+				((HWND)lParam == GetDlgItem(hDlg, IDC_PROP_SAVESTATE)))
+					SetTextColor(hDC, RGB(63, 72, 204));
+
+			return (LRESULT) hBrushDlg;
+
+		case WM_COMMAND:
+			switch (GET_WM_COMMAND_ID(wParam, lParam))
+			{
+				case IDOK:
+				case IDCANCEL:
+					DestroyIcon(hIcon);
+					DeleteObject(hBrushDlg);
+					EndDialog(hDlg, 0);
+					return true;
+			}
+
+			break;
+	}
+
+    return false;
+}
+
+/* Handle all options property pages */
+static intptr_t CALLBACK GameOptionsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+		case WM_INITDIALOG:
+			//mamefx: for coloring of changed elements
+			DisableVisualStyles(hDlg);
+			ModifyPropertySheetForTreeSheet(hDlg);
+			hBrushDlg = CreateSolidBrush(RGB(255, 255, 255));
+			/* Fill in the Game info at the top of the sheet */
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_PROP_TITLE), GameInfoTitle((OPTIONS_TYPE)g_nPropertyMode, g_nGame));
+			InitializeOptions(hDlg);
+			UpdateProperties(hDlg, properties_datamap, m_CurrentOpts);
+			g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+			g_bReset = AreOptionsEqual(m_CurrentOpts, pOrigOpts) ? false : true;
+
+			if (g_nGame == GLOBAL_OPTIONS)
+				ShowWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), SW_HIDE);
+			else
+				EnableWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), (g_bUseDefaults) ? false : true);
+
+			EnableWindow(GetDlgItem(hDlg, IDC_PROP_RESET), g_bReset);
+			ShowWindow(hDlg, SW_SHOW);
+			return true;
+
+		case WM_HSCROLL:
+			/* slider changed */
+			HANDLE_WM_HSCROLL(hDlg, wParam, lParam, OptOnHScroll);
+			EnableWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), true);
+			PropSheet_Changed(GetParent(hDlg), hDlg);
+			// make sure everything's copied over, to determine what's changed
+			UpdateOptions(hDlg, properties_datamap, m_CurrentOpts);
+			// redraw it, it might be a new color now
+			InvalidateRect((HWND)lParam, NULL, true);
+			break;
+
+		case WM_COMMAND:
+		{
+			/* Below, 'changed' is used to signify the 'Apply' button should be enabled. */
+			WORD wID = GET_WM_COMMAND_ID(wParam, lParam);
+			HWND hWndCtrl = GET_WM_COMMAND_HWND(wParam, lParam);
+			WORD wNotifyCode = GET_WM_COMMAND_CMD(wParam, lParam);
+			bool changed = false;
+			bool nCurSelection = false;
+			wchar_t szClass[256];
+
+			switch (wID)
+			{
+			//缘来是你
+			/*************** eziochiu 添加 IPS *****************/
+				case IDC_IPS_LIST:
+					if (wNotifyCode == LBN_SELCHANGE)
+					{
+						IPSSelectionChange(hDlg, hWndCtrl);
+						changed = true;
+					}
+					break;
+			/**************************************************/
+				case IDC_REFRESH:
+					if (wNotifyCode == LBN_SELCHANGE)
+					{
+						RefreshSelectionChange(hDlg, hWndCtrl);
+						changed = true;
+					}
+					break;
+
+				case IDC_AUTOFRAMESKIP:
+					if (Button_GetCheck(GetDlgItem(hDlg, IDC_AUTOFRAMESKIP)))
+						EnableWindow(GetDlgItem(hDlg, IDC_FRAMESKIP), false);
+					else
+						EnableWindow(GetDlgItem(hDlg, IDC_FRAMESKIP), true);
+
+					changed = true;
+					break;
+
+				case IDC_ASPECT:
+					nCurSelection = Button_GetCheck(GetDlgItem(hDlg, IDC_ASPECT));
+
+					if(g_bAutoAspect[GetSelectedScreen(hDlg)] != nCurSelection)
+					{
+						changed = true;
+						g_bAutoAspect[GetSelectedScreen(hDlg)] = nCurSelection;
+					}
+
+					EnableWindow(GetDlgItem(hDlg, IDC_ASPECTRATIOTEXT), !g_bAutoAspect[GetSelectedScreen(hDlg)]);
+					EnableWindow(GetDlgItem(hDlg, IDC_ASPECTRATION), !g_bAutoAspect[GetSelectedScreen(hDlg)]);
+					EnableWindow(GetDlgItem(hDlg, IDC_ASPECTRATIOD), !g_bAutoAspect[GetSelectedScreen(hDlg)]);
+					EnableWindow(GetDlgItem(hDlg, IDC_ASPECTRATIOP), !g_bAutoAspect[GetSelectedScreen(hDlg)]);
+					break;
+
+				case IDC_SNAPSIZE:
+					nCurSelection = Button_GetCheck(GetDlgItem(hDlg, IDC_SNAPSIZE));
+
+					if(g_bAutoSnapSize != nCurSelection)
+					{
+						changed = true;
+						g_bAutoSnapSize = nCurSelection;
+					}
+
+					EnableWindow(GetDlgItem(hDlg, IDC_SNAPSIZETEXT), !g_bAutoSnapSize);
+					EnableWindow(GetDlgItem(hDlg, IDC_SNAPSIZEHEIGHT), !g_bAutoSnapSize);
+					EnableWindow(GetDlgItem(hDlg, IDC_SNAPSIZEWIDTH), !g_bAutoSnapSize);
+					EnableWindow(GetDlgItem(hDlg, IDC_SNAPSIZEX), !g_bAutoSnapSize);
+					break;
+
+				case IDC_SELECT_EFFECT:
+					changed = SelectEffect(hDlg);
+					break;
+
+				case IDC_RESET_EFFECT:
+					changed = ResetEffect(hDlg);
+					break;
+
+				case IDC_SELECT_SHADER0:
+				case IDC_SELECT_SHADER1:
+				case IDC_SELECT_SHADER2:
+				case IDC_SELECT_SHADER3:
+				case IDC_SELECT_SHADER4:
+					changed = SelectMameShader(hDlg, (wID - IDC_SELECT_SHADER0));
+					break;
+
+				case IDC_RESET_SHADER0:
+				case IDC_RESET_SHADER1:
+				case IDC_RESET_SHADER2:
+				case IDC_RESET_SHADER3:
+				case IDC_RESET_SHADER4:
+					changed = ResetMameShader(hDlg, (wID - IDC_RESET_SHADER0));
+					break;
+
+				case IDC_SELECT_SCR_SHADER0:
+				case IDC_SELECT_SCR_SHADER1:
+				case IDC_SELECT_SCR_SHADER2:
+				case IDC_SELECT_SCR_SHADER3:
+				case IDC_SELECT_SCR_SHADER4:
+					changed = SelectScreenShader(hDlg, (wID - IDC_SELECT_SCR_SHADER0));
+					break;
+
+				case IDC_RESET_SCR_SHADER0:
+				case IDC_RESET_SCR_SHADER1:
+				case IDC_RESET_SCR_SHADER2:
+				case IDC_RESET_SCR_SHADER3:
+				case IDC_RESET_SCR_SHADER4:
+					changed = ResetScreenShader(hDlg, (wID - IDC_RESET_SCR_SHADER0));
+					break;
+
+				case IDC_SELECT_CHEATFILE:
+					changed = SelectCheatFile(hDlg);
+					break;
+
+				case IDC_RESET_CHEATFILE:
+					changed = ResetCheatFile(hDlg);
+					break;
+
+				case IDC_JOYSTICKMAP:
+					changed = ChangeJoystickMap(hDlg);
+					break;
+
+				case IDC_RESET_JOYSTICKMAP:
+					changed = ResetJoystickMap(hDlg);
+					break;
+					
+				case IDC_ARTWORK_FALLBACK:
+					changed = ChangeFallback(hDlg);
+					break;
+
+				case IDC_ARTWORK_OVERRIDE:
+					changed = ChangeOverride(hDlg);
+					break;
+					
+
+				case IDC_SELECT_LUASCRIPT:
+					changed = SelectLUAScript(hDlg);
+					break;
+
+				case IDC_RESET_LUASCRIPT:
+					changed = ResetLUAScript(hDlg);
+					break;
+
+				case IDC_SELECT_PLUGIN:
+					changed = SelectPlugins(hDlg);
+					break;
+
+				case IDC_RESET_PLUGIN:
+					changed = ResetPlugins(hDlg);
+					break;
+
+				case IDC_SELECT_BGFX:
+					changed = SelectBGFXChains(hDlg);
+					break;
+
+				case IDC_RESET_BGFX:
+					changed = ResetBGFXChains(hDlg);
+					break;
+				//缘来是你
+				/*************** eziochiu 添加 IPS *****************/
+				
+				case IDD_PROP_IPS:
+					InitializeIPSUI(hDlg);
+					break;
+				/**************************************************/					
+				case IDC_PROP_RESET:
+					if (wNotifyCode != BN_CLICKED)
+					break;
+
+					m_CurrentOpts.copy_from(pOrigOpts);
+					UpdateProperties(hDlg, properties_datamap, m_CurrentOpts);
+					g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+					g_bReset = false;
+					PropSheet_UnChanged(GetParent(hDlg), hDlg);
+					EnableWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), (g_bUseDefaults) ? false : true);
+					break;
+
+				case IDC_USE_DEFAULT:
+					m_CurrentOpts.copy_from(pDefaultOpts);
+					// repopulate the controls with the new data
+					UpdateProperties(hDlg, properties_datamap, m_CurrentOpts);
+					g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+					// This evaluates properly
+					g_bReset = AreOptionsEqual(m_CurrentOpts, pOrigOpts) ? false : true;
+					// Enable/Dispable the Reset to Defaults button
+					EnableWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), (g_bUseDefaults) ? false : true);
+
+					// Tell the dialog to enable/disable the apply button.
+					if (g_nGame != GLOBAL_OPTIONS)
+					{
+						if (g_bReset)
+							PropSheet_Changed(GetParent(hDlg), hDlg);
+						else
+							PropSheet_UnChanged(GetParent(hDlg), hDlg);
+					}
+
+					break;
+
+				// MSH 20070813 - Update all related controls
+				case IDC_SCREENSELECT:
+				case IDC_SCREEN:
+					// NPW 3-Apr-2007:  Ugh I'm only perpetuating the vile hacks in this code
+					if ((wNotifyCode == CBN_SELCHANGE) || (wNotifyCode == CBN_SELENDOK))
+					{
+						datamap_read_control(properties_datamap, hDlg, m_CurrentOpts, wID);
+						datamap_populate_control(properties_datamap, hDlg, m_CurrentOpts, IDC_SIZES);
+						//MSH 20070814 - Hate to do this, but its either this, or update each individual
+						// control on the SCREEN tab.
+						UpdateProperties(hDlg, properties_datamap, m_CurrentOpts);
+						changed = true;
+					}
+
+					break;
+
+				default:
+					// use default behavior; try to get the result out of the datamap if
+					// appropriate
+					GetClassName(hWndCtrl, szClass, std::size(szClass));
+
+					if (!_tcscmp(szClass, WC_COMBOBOX))
+					{
+						// combo box
+						if ((wNotifyCode == CBN_SELCHANGE) || (wNotifyCode == CBN_SELENDOK))
+							changed = datamap_read_control(properties_datamap, hDlg, m_CurrentOpts, wID);
+					}
+						else if (!_tcscmp(szClass, WC_BUTTON) && (GetWindowLong(hWndCtrl, GWL_STYLE) & BS_CHECKBOX))
+						// check box
+							changed = datamap_read_control(properties_datamap, hDlg, m_CurrentOpts, wID);
+
+					break;
+			}
+
+			if (changed == true)
+			{
+				// make sure everything's copied over, to determine what's changed
+				UpdateOptions(hDlg, properties_datamap, m_CurrentOpts);
+				// enable the apply button
+				PropSheet_Changed(GetParent(hDlg), hDlg);
+				g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+				g_bReset = AreOptionsEqual(m_CurrentOpts, pOrigOpts) ? false : true;
+				EnableWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), (g_bUseDefaults) ? false : true);
+			}
+
+			break;
+		}
+
+		case WM_NOTIFY:
+		{
+			switch (((NMHDR*)lParam)->code)
+			{
+				//We'll need to use a CheckState Table
+				//Because this one gets called for all kinds of other things too, and not only if a check is set
+				case PSN_SETACTIVE:
+					/* Initialize the controls. */
+					UpdateProperties(hDlg, properties_datamap, m_CurrentOpts);
+					g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+					g_bReset = AreOptionsEqual(m_CurrentOpts, pOrigOpts) ? false : true;
+					// Sync RESET TO DEFAULTS buttons.
+					EnableWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), (g_bUseDefaults) ? false : true);
+					break;
+
+				case PSN_APPLY:
+					// Read the datamap
+					UpdateOptions(hDlg, properties_datamap, m_CurrentOpts);
+					pOrigOpts.copy_from(m_CurrentOpts);
+					// Repopulate the controls?  WTF?  We just read them, they should be fine.
+					UpdateProperties(hDlg, properties_datamap, m_CurrentOpts);
+					// Determine button states.
+					g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+					g_bReset = false;
+					// Sync RESET and RESET TO DEFAULTS buttons.
+					EnableWindow(GetDlgItem(hDlg, IDC_USE_DEFAULT), (g_bUseDefaults) ? false : true);
+					EnableWindow(GetDlgItem(hDlg, IDC_PROP_RESET), g_bReset);
+					// Save or remove the current options
+					SaveOptions((OPTIONS_TYPE)g_nPropertyMode, m_CurrentOpts, g_nGame);
+					// Disable apply button
+					PropSheet_UnChanged(GetParent(hDlg), hDlg);
+					SetWindowLongPtr(hDlg, DWLP_MSGRESULT, PSNRET_NOERROR);
+					return true;
+
+				case PSN_KILLACTIVE:
+					/* Save Changes to the options here. */
+					UpdateOptions(hDlg, properties_datamap, m_CurrentOpts);
+					// Determine button states.
+					g_bUseDefaults = AreOptionsEqual(m_CurrentOpts, pDefaultOpts);
+					ResetDataMap(hDlg);
+					SetWindowLongPtr(hDlg, DWLP_MSGRESULT, false);
+					return true;
+
+				case PSN_RESET:
+					// Reset to the original values. Disregard changes
+					m_CurrentOpts.copy_from(pOrigOpts);
+					SetWindowLongPtr(hDlg, DWLP_MSGRESULT, false);
+					break;
+			}
+
+			break;
+		}
+
+		//mamefx: for coloring of changed elements
+		case WM_CTLCOLORDLG:
+			return (LRESULT) hBrushDlg;
+
+		case WM_CTLCOLORSTATIC:
+		case WM_CTLCOLORBTN:
+		case WM_CTLCOLORLISTBOX:
+		case WM_CTLCOLOREDIT:
+		{
+			HDC hDC = (HDC)wParam;
+			SetBkMode(hDC, TRANSPARENT);
+			SetTextColor(hDC, GetSysColor(COLOR_WINDOWTEXT));
+
+			//Set the Coloring of the elements
+			if (GetWindowLongPtr((HWND)lParam, GWL_ID) < 0)
+				return (LRESULT) hBrushDlg;
+
+			if (g_nPropertyMode == OPTIONS_GLOBAL)
+				SetTextColor(hDC, GetSysColor(COLOR_WINDOWTEXT));
+			else if (IsControlOptionValue(hDlg,(HWND)lParam, m_CurrentOpts, pOptsGlobal))
+				SetTextColor(hDC, GetSysColor(COLOR_WINDOWTEXT));
+			else if (IsControlOptionValue(hDlg,(HWND)lParam, m_CurrentOpts, pOptsHorizontal) && !DriverIsVertical(g_nGame))
+				SetTextColor(hDC, RGB(163, 73, 164)); // purple
+			else if (IsControlOptionValue(hDlg,(HWND)lParam, m_CurrentOpts, pOptsVertical) && DriverIsVertical(g_nGame))
+				SetTextColor(hDC, RGB(63, 72, 204)); // blue
+			else if (IsControlOptionValue(hDlg,(HWND)lParam, m_CurrentOpts, pOptsRaster) && !DriverIsVector(g_nGame))
+				SetTextColor(hDC, RGB(136, 0, 21)); // dark red
+			else if (IsControlOptionValue(hDlg,(HWND)lParam, m_CurrentOpts, pOptsVector) && DriverIsVector(g_nGame))
+				SetTextColor(hDC, RGB(255, 127, 39)); // orange
+			else if (IsControlOptionValue(hDlg,(HWND)lParam, m_CurrentOpts, pOptsSource))
+				SetTextColor(hDC, RGB(237, 28, 36)); // red
+			else if (IsControlOptionValue(hDlg,(HWND)lParam, m_CurrentOpts, pDefaultOpts))
+				SetTextColor(hDC, RGB(34, 177, 76)); // green
+			else
+			{
+				switch (g_nPropertyMode)
+				{
+					case OPTIONS_GAME:
+						SetTextColor(hDC, RGB(34, 177, 76));
+						break;
+
+					case OPTIONS_SOURCE:
+						SetTextColor(hDC, RGB(237, 28, 36));
+						break;
+
+					case OPTIONS_RASTER:
+						SetTextColor(hDC, RGB(136, 0, 21));
+						break;
+
+					case OPTIONS_VECTOR:
+						SetTextColor(hDC, RGB(255, 127, 39));
+						break;
+
+					case OPTIONS_HORIZONTAL:
+						SetTextColor(hDC, RGB(163, 73, 164));
+						break;
+
+					case OPTIONS_VERTICAL:
+						SetTextColor(hDC, RGB(63, 72, 204));
+						break;
+
+					case OPTIONS_GLOBAL:
+					default:
+						SetTextColor(hDC, GetSysColor(COLOR_WINDOWTEXT));
+						break;
+				}
+			}
+
+			if (uMsg == WM_CTLCOLORLISTBOX || uMsg == WM_CTLCOLOREDIT)
+				return (LRESULT) GetStockObject(WHITE_BRUSH);
+			else
+				return (LRESULT) hBrushDlg;
+		}
+	}
+
+	EnableWindow(GetDlgItem(hDlg, IDC_PROP_RESET), g_bReset);
+	return false;
+}
+
+/* Read controls that are not handled in the DataMap */
+static void PropToOptions(HWND hWnd, windows_options &opts)
+{
+	HWND hCtrl = NULL;
+	HWND hCtrl2 = NULL;
+	HWND hCtrl3 = NULL;
+	wchar_t buffer[200];
+	char buffer2[200];
+
+	/* aspect ratio */
+	hCtrl  = GetDlgItem(hWnd, IDC_ASPECTRATION);
+	hCtrl2 = GetDlgItem(hWnd, IDC_ASPECTRATIOD);
+	hCtrl3 = GetDlgItem(hWnd, IDC_ASPECT);
+
+	if (hCtrl && hCtrl2 && hCtrl3)
+	{
+		int n = 0;
+		int d = 0;
+		char aspect_option[32];
+
+		snprintf(aspect_option, std::size(aspect_option), "aspect%d", GetSelectedScreen(hWnd));
+
+		if (Button_GetCheck(hCtrl3))
+			opts.set_value(aspect_option, "auto", OPTION_PRIORITY_CMDLINE);
+		else
+		{
+			Edit_GetText(hCtrl, buffer, std::size(buffer));
+			_stscanf(buffer, TEXT("%d"), &n);
+			Edit_GetText(hCtrl2, buffer, std::size(buffer));
+			_stscanf(buffer, TEXT("%d"), &d);
+
+			if (n == 0 || d == 0)
+			{
+				n = 4;
+				d = 3;
+			}
+
+			snprintf(buffer2, std::size(buffer2), "%d:%d", n, d);
+			opts.set_value(aspect_option, buffer2, OPTION_PRIORITY_CMDLINE);
+		}
+	}
+
+	/* snapshot size */
+	hCtrl  = GetDlgItem(hWnd, IDC_SNAPSIZEWIDTH);
+	hCtrl2 = GetDlgItem(hWnd, IDC_SNAPSIZEHEIGHT);
+	hCtrl3 = GetDlgItem(hWnd, IDC_SNAPSIZE);
+
+	if (hCtrl && hCtrl2 && hCtrl3)
+	{
+		int width = 0;
+		int height = 0;
+
+		if (Button_GetCheck(hCtrl3))
+			opts.set_value(OPTION_SNAPSIZE, "auto", OPTION_PRIORITY_CMDLINE);
+		else
+		{
+			Edit_GetText(hCtrl, buffer, std::size(buffer));
+			_stscanf(buffer, TEXT("%d"), &width);
+			Edit_GetText(hCtrl2, buffer, std::size(buffer));
+			_stscanf(buffer, TEXT("%d"), &height);
+
+			if (width == 0 || height == 0)
+			{
+				width = 640;
+				height = 480;
+			}
+
+			snprintf(buffer2, std::size(buffer2), "%dx%d", width, height);
+			opts.set_value(OPTION_SNAPSIZE, buffer2, OPTION_PRIORITY_CMDLINE);
+		}
+	}
+}
+
+/* Update options from the dialog */
+static void UpdateOptions(HWND hDlg, datamap *map, windows_options &opts)
+{
+	/* These are always called together, so make one convenience function. */
+	datamap_read_all_controls(map, hDlg, opts);
+	PropToOptions(hDlg, opts);
+}
+
+/* Update the dialog from the options */
+static void UpdateProperties(HWND hDlg, datamap *map, windows_options &opts)
+{
+	/* set ticks frequency in variours sliders */
+	SendMessage(GetDlgItem(hDlg, IDC_GAMMA), 		TBM_SETTICFREQ, 10, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_CONTRAST), 	TBM_SETTICFREQ, 5, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_BRIGHTCORRECT),TBM_SETTICFREQ, 20, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_PAUSEBRIGHT), 	TBM_SETTICFREQ, 20, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_FSGAMMA),		TBM_SETTICFREQ, 10, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_FSCONTRAST), 	TBM_SETTICFREQ, 5, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_FSBRIGHTNESS), TBM_SETTICFREQ, 20, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_SECONDSTORUN), TBM_SETTICFREQ, 10, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_JDZ), 			TBM_SETTICFREQ, 20, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_JSAT), 		TBM_SETTICFREQ, 20, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_VOLUME), 		TBM_SETTICFREQ, 4, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_HIGH_PRIORITY),TBM_SETTICFREQ, 2, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_SPEED), 		TBM_SETTICFREQ, 50, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_BEAM_MIN), 	TBM_SETTICFREQ, 5, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_BEAM_MAX), 	TBM_SETTICFREQ, 50, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_BEAM_INTEN), 	TBM_SETTICFREQ, 100, 0);
+	SendMessage(GetDlgItem(hDlg, IDC_FLICKER), 		TBM_SETTICFREQ, 5, 0);
+	/* These are always called together, so make one convenience function. */
+	datamap_populate_all_controls(map, hDlg, opts);
+	OptionsToProp(hDlg, opts);
+	SetPropEnabledControls(hDlg);
+}
+
+/* Populate controls that are not handled in the DataMap */
+static void OptionsToProp(HWND hWnd, windows_options &opts)
+{
+	HWND hCtrl = NULL;
+	HWND hCtrl2 = NULL;
+	wchar_t buf[100];
+	char aspect_option[32];
+	char buffer[MAX_PATH];
+
+	/* Setup refresh list based on depth. */
+	datamap_update_control(properties_datamap, hWnd, m_CurrentOpts, IDC_REFRESH);
+	/* Setup Select screen*/
+	UpdateSelectScreenUI(hWnd );
+
+	hCtrl = GetDlgItem(hWnd, IDC_ASPECT);
+
+	if (hCtrl)
+		Button_SetCheck(hCtrl, g_bAutoAspect[GetSelectedScreen(hWnd)]);
+
+	hCtrl = GetDlgItem(hWnd, IDC_SNAPSIZE);
+
+	if (hCtrl)
+		Button_SetCheck(hCtrl, g_bAutoSnapSize);
+
+	/* Bios select list */
+	hCtrl = GetDlgItem(hWnd, IDC_BIOS);
+
+	if (hCtrl)
+	{
+		int iCount = ComboBox_GetCount(hCtrl);
+
+		for (int i = 0; i < iCount; i++)
+		{
+			const char *cBuffer = (const char*)ComboBox_GetItemData(hCtrl, i);
+
+			if (strcmp(cBuffer, m_CurrentOpts.value(OPTION_BIOS)) == 0)
+			{
+				(void)ComboBox_SetCurSel(hCtrl, i);
+				break;
+			}
+		}
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_ASPECT);
+
+	if (hCtrl)
+	{
+		snprintf(aspect_option, std::size(aspect_option), "aspect%d", GetSelectedScreen(hWnd));
+
+		if( strcmp(opts.value(aspect_option), "auto") == 0)
+		{
+			Button_SetCheck(hCtrl, true);
+			g_bAutoAspect[GetSelectedScreen(hWnd)] = true;
+		}
+		else
+		{
+			Button_SetCheck(hCtrl, false);
+			g_bAutoAspect[GetSelectedScreen(hWnd)] = false;
+		}
+	}
+
+	/* aspect ratio */
+	hCtrl  = GetDlgItem(hWnd, IDC_ASPECTRATION);
+	hCtrl2 = GetDlgItem(hWnd, IDC_ASPECTRATIOD);
+
+	if (hCtrl && hCtrl2)
+	{
+		int n = 0;
+		int d = 0;
+
+		snprintf(aspect_option, std::size(aspect_option), "aspect%d", GetSelectedScreen(hWnd));
+
+		if (sscanf(opts.value(aspect_option), "%d:%d", &n, &d) == 2 && n != 0 && d != 0)
+		{
+			_sntprintf(buf, std::size(buf), TEXT("%d"), n);
+			Edit_SetText(hCtrl, buf);
+			_sntprintf(buf, std::size(buf), TEXT("%d"), d);
+			Edit_SetText(hCtrl2, buf);
+		}
+		else
+		{
+			Edit_SetText(hCtrl,  TEXT("4"));
+			Edit_SetText(hCtrl2, TEXT("3"));
+		}
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_EFFECT);
+
+	if (hCtrl)
+	{
+		const char* effect = opts.value(OPTION_EFFECT);
+
+		if (strcmp(effect, "none") == 0)
+			winui_set_window_text_utf8(hCtrl, "无");
+		else
+			winui_set_window_text_utf8(hCtrl, effect);
+	}
+
+	for (int i = 0; i < 5; i++)
+	{
+		UpdateMameShader(hWnd, i, opts);
+		UpdateScreenShader(hWnd, i, opts);
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_CHEATFILE);
+
+	if (hCtrl)
+	{
+		const char* cheatfile = opts.value(OPTION_CHEATPATH);
+
+		if (strcmp(cheatfile, "cheat") == 0)
+			winui_set_window_text_utf8(hCtrl, "Default");
+		else
+		{
+			char *cheatname = strrchr(cheatfile, '\\');
+
+			if (cheatname != NULL)
+			{
+				strcpy(buffer, cheatname + 1);
+				winui_set_window_text_utf8(hCtrl, buffer);
+			}
+			else
+				winui_set_window_text_utf8(hCtrl, cheatfile);
+		}
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_JOYSTICKMAP);
+
+	if (hCtrl)
+	{
+		const char* joymap = opts.value(OPTION_JOYSTICK_MAP);
+
+		winui_set_window_text_utf8(hCtrl, joymap);
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_LUASCRIPT);
+
+	if (hCtrl)
+	{
+		const char* script = opts.value(OPTION_AUTOBOOT_SCRIPT);
+
+		if (strcmp(script, "") == 0)
+			winui_set_window_text_utf8(hCtrl, "无");
+		else
+		{
+			wchar_t *t_filename = win_wstring_from_utf8(script);
+			wchar_t *tempname = PathFindFileName(t_filename);
+			PathRemoveExtension(tempname);
+			char *optname = win_utf8_from_wstring(tempname);
+			strcpy(buffer, optname);
+			free(t_filename);
+			free(optname);
+			winui_set_window_text_utf8(hCtrl, buffer);
+		}
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_PLUGIN);
+
+	if (hCtrl)
+	{
+		const char* plugin = opts.value(OPTION_PLUGIN);
+
+		if (strcmp(plugin, "") == 0)
+			winui_set_window_text_utf8(hCtrl, "无");
+		else
+			winui_set_window_text_utf8(hCtrl, plugin);
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_BGFX_CHAINS);
+
+	if (hCtrl)
+	{
+		const char* chains = opts.value(OSDOPTION_BGFX_SCREEN_CHAINS);
+
+		if (strcmp(chains, "default") == 0)
+			winui_set_window_text_utf8(hCtrl, "Default");
+		else
+			winui_set_window_text_utf8(hCtrl, chains);
+	}
+
+	hCtrl = GetDlgItem(hWnd, IDC_SNAPSIZE);
+
+	if (hCtrl)
+	{
+		if(strcmp(opts.value(OPTION_SNAPSIZE), "auto") == 0)
+		{
+			Button_SetCheck(hCtrl, true);
+			g_bAutoSnapSize = true;
+		}
+		else
+		{
+			Button_SetCheck(hCtrl, false);
+			g_bAutoSnapSize = false;
+		}
+	}
+
+	/* snapshot size */
+	hCtrl  = GetDlgItem(hWnd, IDC_SNAPSIZEWIDTH);
+	hCtrl2 = GetDlgItem(hWnd, IDC_SNAPSIZEHEIGHT);
+
+	if (hCtrl && hCtrl2)
+	{
+		int width = 0;
+		int height = 0;
+
+		if (sscanf(opts.value(OPTION_SNAPSIZE), "%dx%d", &width, &height) == 2 && width != 0 && height != 0)
+		{
+			_sntprintf(buf, std::size(buf), TEXT("%d"), width);
+			Edit_SetText(hCtrl, buf);
+			_sntprintf(buf, std::size(buf), TEXT("%d"), height);
+			Edit_SetText(hCtrl2, buf);
+		}
+		else
+		{
+			Edit_SetText(hCtrl,  TEXT("640"));
+			Edit_SetText(hCtrl2, TEXT("480"));
+		}
+	}
+}
+
+/* Adjust controls - tune them to the currently selected game */
+static void SetPropEnabledControls(HWND hWnd)
+{
+	int nIndex = g_nGame;
+	bool d3d = (!core_stricmp(m_CurrentOpts.value(OSDOPTION_VIDEO), "d3d") || !core_stricmp(m_CurrentOpts.value(OSDOPTION_VIDEO), "auto"));
+	bool opengl = !core_stricmp(m_CurrentOpts.value(OSDOPTION_VIDEO), "opengl");
+	bool bgfx = !core_stricmp(m_CurrentOpts.value(OSDOPTION_VIDEO), "bgfx");
+	bool in_window = m_CurrentOpts.bool_value(OSDOPTION_WINDOW);
+
+	/* Video options */
+	EnableWindow(GetDlgItem(hWnd, IDC_REFRESH),         !in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_SIZES),         	!in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSGAMMA),      	!in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSGAMMATEXT),  	!in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSGAMMADISP),  	!in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSBRIGHTNESS),    !in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSBRIGHTNESSTEXT),!in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSBRIGHTNESSDISP),!in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSCONTRAST),      !in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSCONTRASTTEXT),  !in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_FSCONTRASTDISP),  !in_window);
+	EnableWindow(GetDlgItem(hWnd, IDC_ASPECTRATIOTEXT), !g_bAutoAspect[GetSelectedScreen(hWnd)]);
+	EnableWindow(GetDlgItem(hWnd, IDC_ASPECTRATION), 	!g_bAutoAspect[GetSelectedScreen(hWnd)]);
+	EnableWindow(GetDlgItem(hWnd, IDC_ASPECTRATIOD), 	!g_bAutoAspect[GetSelectedScreen(hWnd)]);
+	EnableWindow(GetDlgItem(hWnd, IDC_ASPECTRATIOP), 	!g_bAutoAspect[GetSelectedScreen(hWnd)]);
+	EnableWindow(GetDlgItem(hWnd, IDC_HLSL_ON), 		d3d);
+	EnableWindow(GetDlgItem(hWnd, IDC_GLSL), 			opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_GLSLFILTER), 		opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_GLSLPOW), 		opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_GLSLTEXTURE), 	opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_GLSLVBO), 		opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_GLSLPBO), 		opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_GLSLSYNC), 		opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SHADER0), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SHADER1), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SHADER2), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SHADER3), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SHADER4), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SCR_SHADER0), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SCR_SHADER1), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SCR_SHADER2), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SCR_SHADER3), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_SCR_SHADER4), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SHADER0), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SHADER1), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SHADER2), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SHADER3), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SHADER4), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SCR_SHADER0), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SCR_SHADER1), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SCR_SHADER2), 	opengl);
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SCR_SHADER3), 	opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_SCR_SHADER4), 	opengl);	
+	EnableWindow(GetDlgItem(hWnd, IDC_SELECT_BGFX), 	bgfx);	
+	EnableWindow(GetDlgItem(hWnd, IDC_RESET_BGFX), 		bgfx);	
+	/* Snapshot options */
+	EnableWindow(GetDlgItem(hWnd, IDC_SNAPSIZETEXT), 	!g_bAutoSnapSize);
+	EnableWindow(GetDlgItem(hWnd, IDC_SNAPSIZEHEIGHT), 	!g_bAutoSnapSize);
+	EnableWindow(GetDlgItem(hWnd, IDC_SNAPSIZEWIDTH), 	!g_bAutoSnapSize);
+	EnableWindow(GetDlgItem(hWnd, IDC_SNAPSIZEX), 		!g_bAutoSnapSize);
+	/* Misc options */
+	if (Button_GetCheck(GetDlgItem(hWnd, IDC_AUTOFRAMESKIP)))
+		EnableWindow(GetDlgItem(hWnd, IDC_FRAMESKIP), 	false);
+	else
+		EnableWindow(GetDlgItem(hWnd, IDC_FRAMESKIP), 	true);
+
+	if (nIndex <= -1 || DriverHasOptionalBIOS(nIndex))
+		EnableWindow(GetDlgItem(hWnd, IDC_BIOS),		true);
+	else
+		EnableWindow(GetDlgItem(hWnd, IDC_BIOS),		false);
+
+	if (nIndex <= -1 || DriverSupportsSaveState(nIndex))
+		EnableWindow(GetDlgItem(hWnd, IDC_ENABLE_AUTOSAVE), true);
+	else
+		EnableWindow(GetDlgItem(hWnd, IDC_ENABLE_AUTOSAVE), false);
+}
+
+//============================================================
+//  CONTROL HELPER FUNCTIONS FOR DATA EXCHANGE
+//============================================================
+
+static bool RotateReadControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	int selected_index = ComboBox_GetCurSel(control);
+	int original_selection = 0;
+
+	// Figure out what the original selection value is
+	if (opts.bool_value(OPTION_ROR) && !opts.bool_value(OPTION_ROL))
+		original_selection = 1;
+	else if (!opts.bool_value(OPTION_ROR) && opts.bool_value(OPTION_ROL))
+		original_selection = 2;
+	else if (!opts.bool_value(OPTION_ROTATE))
+		original_selection = 3;
+	else if (opts.bool_value(OPTION_AUTOROR))
+		original_selection = 4;
+	else if (opts.bool_value(OPTION_AUTOROL))
+		original_selection = 5;
+
+	// Any work to do?  If so, make the changes and return true.
+	if (selected_index != original_selection)
+	{
+		// Set the options based on the new selection.
+		opts.set_value(OPTION_ROR,		selected_index == 1, OPTION_PRIORITY_CMDLINE);
+		opts.set_value(OPTION_ROL,		selected_index == 2, OPTION_PRIORITY_CMDLINE);
+		opts.set_value(OPTION_ROTATE,	selected_index != 3, OPTION_PRIORITY_CMDLINE);
+		opts.set_value(OPTION_AUTOROR,	selected_index == 4, OPTION_PRIORITY_CMDLINE);
+		opts.set_value(OPTION_AUTOROL,	selected_index == 5, OPTION_PRIORITY_CMDLINE);
+		return true;
+	}
+
+	// No changes
+	return false;
+}
+
+static bool RotatePopulateControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	int selected_index = 0;
+
+	if (opts.bool_value(OPTION_ROR) && !opts.bool_value(OPTION_ROL))
+		selected_index = 1;
+	else if (!opts.bool_value(OPTION_ROR) && opts.bool_value(OPTION_ROL))
+		selected_index = 2;
+	else if (!opts.bool_value(OPTION_ROTATE))
+		selected_index = 3;
+	else if (opts.bool_value(OPTION_AUTOROR))
+		selected_index = 4;
+	else if (opts.bool_value(OPTION_AUTOROL))
+		selected_index = 5;
+
+	(void)ComboBox_SetCurSel(control, selected_index);
+	return false;
+}
+
+static bool ScreenReadControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	char screen_option_name[32];
+
+	int selected_screen = GetSelectedScreen(dialog);
+	int screen_option_index = ComboBox_GetCurSel(control);
+	const char *screen_option_value = (const char*)ComboBox_GetItemData(control, screen_option_index);
+	snprintf(screen_option_name, std::size(screen_option_name), "screen%d", selected_screen);
+	opts.set_value(screen_option_name, screen_option_value, OPTION_PRIORITY_CMDLINE);
+	return false;
+}
+
+static bool ScreenPopulateControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	DISPLAY_DEVICE dd;
+	int nSelection = 0;
+
+	/* Remove all items in the list. */
+	(void)ComboBox_ResetContent(control);
+	(void)ComboBox_InsertString(control, 0, TEXT("自动"));
+	(void)ComboBox_SetItemData(control, 0, "auto");
+
+	memset(&dd, 0, sizeof(DISPLAY_DEVICE));
+	dd.cb = sizeof(DISPLAY_DEVICE);
+
+	for (int i = 0; EnumDisplayDevices(NULL, i, &dd, 0); i++)
+	{
+		if (!(dd.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER))
+		{
+			//we have to add 1 to account for the "auto" entry
+			char screen_option[32];
+			const char *device = win_utf8_from_wstring(dd.DeviceName);
+			wchar_t *t_device = win_wstring_from_utf8(device);
+			(void)ComboBox_InsertString(control, i + 1, t_device);
+			(void)ComboBox_SetItemData(control, i + 1, device);
+			snprintf(screen_option, std::size(screen_option), "screen%d", GetSelectedScreen(dialog));
+			const char *option = opts.value(screen_option);
+
+			if (strcmp(option, device) == 0)
+				nSelection = i + 1;
+
+			free(t_device);
+			device = NULL;
+		}
+	}
+
+	(void)ComboBox_SetCurSel(control, nSelection);
+	return false;
+}
+
+static void ViewSetOptionName(datamap *map, HWND dialog, HWND control, char *buffer, size_t buffer_size)
+{
+	snprintf(buffer, buffer_size, "view%d", GetSelectedScreen(dialog));
+}
+
+static bool ViewPopulateControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	int selected_index = 0;
+	char view_option[32];
+
+	// determine the view option value
+	snprintf(view_option, std::size(view_option), "view%d", GetSelectedScreen(dialog));
+	const char *view = opts.value(view_option);
+
+	(void)ComboBox_ResetContent(control);
+
+	for (int i = 0; i < NUMVIEW; i++)
+	{
+		(void)ComboBox_InsertString(control, i, g_ComboBoxView[i].m_pText);
+		(void)ComboBox_SetItemData(control, i, g_ComboBoxView[i].m_pData);
+
+		if (!strcmp(view, g_ComboBoxView[i].m_pData))
+			selected_index = i;
+	}
+
+	(void)ComboBox_SetCurSel(control, selected_index);
+	return false;
+}
+
+static bool DefaultInputReadControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	int input_option_index = ComboBox_GetCurSel(control);
+	const char *input_option_value = (const char*)ComboBox_GetItemData(control, input_option_index);
+	opts.set_value(OPTION_CTRLR, input_option_index ? input_option_value : "", OPTION_PRIORITY_CMDLINE);
+	return false;
+}
+
+static bool DefaultInputPopulateControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	WIN32_FIND_DATA FindFileData;
+	char path[MAX_PATH];
+	int selected = 0;
+	int index = 0;
+
+	// determine the ctrlr option
+	const char *ctrlr_option = opts.value(OPTION_CTRLR);
+
+	// reset the controllers dropdown
+	(void)ComboBox_ResetContent(control);
+	(void)ComboBox_InsertString(control, index, TEXT("默认"));
+	(void)ComboBox_SetItemData(control, index, "");
+	index++;
+	snprintf(path, std::size(path), "%s\\*.*", GetCtrlrDir());
+	HANDLE hFind = winui_find_first_file_utf8(path, &FindFileData);
+
+	if (hFind != INVALID_HANDLE_VALUE)
+	{
+		while (FindNextFile (hFind, &FindFileData) != 0)
+		{
+			// copy the filename
+			const char *root = win_utf8_from_wstring(FindFileData.cFileName);
+			// find the extension
+			char *ext = strrchr(root, '.');
+
+			if (ext)
+			{
+				// check if it's a cfg file
+				if (strcmp (ext, ".cfg") == 0)
+				{
+					// and strip off the extension
+					*ext = 0;
+
+					// set the option?
+					if (!strcmp(root, ctrlr_option))
+						selected = index;
+
+					// add it as an option
+					wchar_t *t_root = win_wstring_from_utf8(root);
+					(void)ComboBox_InsertString(control, index, t_root);
+					(void)ComboBox_SetItemData(control, index, root);
+					free(t_root);
+					root = NULL;
+					index++;
+				}
+			}
+		}
+
+		FindClose (hFind);
+	}
+
+	(void)ComboBox_SetCurSel(control, selected);
+
+	return false;
+}
+
+static void ResolutionSetOptionName(datamap *map, HWND dialog, HWND control, char *buffer, size_t buffer_size)
+{
+	snprintf(buffer, buffer_size, "resolution%d", GetSelectedScreen(dialog));
+}
+
+static bool ResolutionReadControl(datamap *map, HWND dialog, HWND control, windows_options &opts, const char *option_name)
+{
+	HWND refresh_control = GetDlgItem(dialog, IDC_REFRESH);
+	HWND sizes_control = GetDlgItem(dialog, IDC_SIZES);
+
+	if (refresh_control && sizes_control)
+	{
+		char option_value[256];
+		int width = 0; 
+		int height = 0;
+		wchar_t buffer[256];
+
+		(void)ComboBox_GetText(sizes_control, buffer, std::size(buffer) - 1);
+
+		if (_stscanf(buffer, TEXT("%d x %d"), &width, &height) == 2)
+		{
+			int refresh_index = ComboBox_GetCurSel(refresh_control);
+			int refresh_value = ComboBox_GetItemData(refresh_control, refresh_index);
+			snprintf(option_value, std::size(option_value), "%dx%d@%d", width, height, refresh_value);
+		}
+		else
+			strcpy(option_value, "auto");
+		
+		opts.set_value(option_name, option_value, OPTION_PRIORITY_CMDLINE);
+	}
+
+	return false;
+}
+
+static bool ResolutionPopulateControl(datamap *map, HWND dialog, HWND control_, windows_options &opts, const char *option_name)
+{
+	HWND sizes_control = GetDlgItem(dialog, IDC_SIZES);
+	HWND refresh_control = GetDlgItem(dialog, IDC_REFRESH);
+	DEVMODE devmode;
+
+	if (sizes_control && refresh_control)
+	{
+		int sizes_index = 0;
+		int refresh_index = 0;
+		int sizes_selection = 0;
+		int refresh_selection = 0;
+		char screen_option[32];
+		int width = 0; 
+		int height = 0; 
+		int refresh = 0;
+		wchar_t buf[32];
+
+		// determine the resolution
+		const char *option_value = opts.value(option_name);
+
+		if (sscanf(option_value, "%dx%d@%d", &width, &height, &refresh) != 3)
+		{
+			width = 0;
+			height = 0;
+			refresh = 0;
+		}
+
+		// reset sizes control
+		(void)ComboBox_ResetContent(sizes_control);
+		(void)ComboBox_InsertString(sizes_control, sizes_index, TEXT("自动"));
+		(void)ComboBox_SetItemData(sizes_control, sizes_index, 0);
+		sizes_index++;
+		// reset refresh control
+		(void)ComboBox_ResetContent(refresh_control);
+		(void)ComboBox_InsertString(refresh_control, refresh_index, TEXT("自动"));
+		(void)ComboBox_SetItemData(refresh_control, refresh_index, 0);
+		refresh_index++;
+		// determine which screen we're using
+		snprintf(screen_option, std::size(screen_option), "屏幕%d", GetSelectedScreen(dialog));
+		const char *screen = opts.value(screen_option);
+		wchar_t *t_screen = win_wstring_from_utf8(screen);
+		// retrieve screen information
+		devmode.dmSize = sizeof(DEVMODE);
+
+		for (int i = 0; EnumDisplaySettings(t_screen, i, &devmode); i++)
+		{
+			if ((devmode.dmBitsPerPel == 32 ) // Only 32 bit depth supported by core
+				&& (devmode.dmDisplayFrequency == refresh || refresh == 0))
+			{
+				_sntprintf(buf, std::size(buf), TEXT("%d x %d"), devmode.dmPelsWidth, devmode.dmPelsHeight);
+
+				if (ComboBox_FindString(sizes_control, 0, buf) == CB_ERR)
+				{
+					(void)ComboBox_InsertString(sizes_control, sizes_index, buf);
+
+					if ((width == devmode.dmPelsWidth) && (height == devmode.dmPelsHeight))
+						sizes_selection = sizes_index;
+
+					sizes_index++;
+				}
+			}
+
+			if (devmode.dmDisplayFrequency >= 10 )
+			{
+				// I have some devmode "vga" which specifes 1 Hz, which is probably bogus, so we filter it out
+				_sntprintf(buf, std::size(buf), TEXT("%d Hz"), devmode.dmDisplayFrequency);
+
+				if (ComboBox_FindString(refresh_control, 0, buf) == CB_ERR)
+				{
+					(void)ComboBox_InsertString(refresh_control, refresh_index, buf);
+					(void)ComboBox_SetItemData(refresh_control, refresh_index, devmode.dmDisplayFrequency);
+
+					if (refresh == devmode.dmDisplayFrequency)
+						refresh_selection = refresh_index;
+
+					refresh_index++;
+				}
+			}
+		}
+
+		free(t_screen);
+		(void)ComboBox_SetCurSel(sizes_control, sizes_selection);
+		(void)ComboBox_SetCurSel(refresh_control, refresh_selection);
+	}
+
+	return false;
+}
+
+//============================================================
+
+/************************************************************
+ * DataMap initializers
+ ************************************************************/
+
+/* Initialize local helper variables */
+static void ResetDataMap(HWND hWnd)
+{
+	char screen_option[32];
+
+	snprintf(screen_option, std::size(screen_option), "screen%d", GetSelectedScreen(hWnd));
+
+	if (m_CurrentOpts.value(screen_option) == NULL || (core_stricmp(m_CurrentOpts.value(screen_option), "") == 0 )
+		|| (core_stricmp(m_CurrentOpts.value(screen_option), "auto") == 0 ) )
+		m_CurrentOpts.set_value(screen_option, "auto", OPTION_PRIORITY_CMDLINE);
+}
+
+/* Build the control mapping by adding all needed information to the DataMap */
+static void BuildDataMap(void)
+{
+	properties_datamap = datamap_create();
+
+	// core state options
+	datamap_add(properties_datamap, IDC_ENABLE_AUTOSAVE,		DM_BOOL,	OPTION_AUTOSAVE);
+	datamap_add(properties_datamap, IDC_SNAPVIEW,				DM_STRING,	OPTION_SNAPVIEW);
+	datamap_add(properties_datamap, IDC_SNAPNAME,				DM_STRING,	OPTION_SNAPNAME);
+	datamap_add(properties_datamap, IDC_SNAPBILINEAR,			DM_BOOL,	OPTION_SNAPBILINEAR);
+	datamap_add(properties_datamap, IDC_SNAPBURNIN,				DM_BOOL,	OPTION_BURNIN);
+	datamap_add(properties_datamap, IDC_EXIT_PLAYBACK,			DM_BOOL,	OPTION_EXIT_AFTER_PLAYBACK);
+	datamap_add(properties_datamap, IDC_SNAPSIZEWIDTH,			DM_STRING,	NULL);
+	datamap_add(properties_datamap, IDC_SNAPSIZEHEIGHT,			DM_STRING,	NULL);
+	// core performance options
+	datamap_add(properties_datamap, IDC_AUTOFRAMESKIP,			DM_BOOL,	OPTION_AUTOFRAMESKIP);
+	datamap_add(properties_datamap, IDC_FRAMESKIP,				DM_INT,		OPTION_FRAMESKIP);
+	datamap_add(properties_datamap, IDC_SECONDSTORUN,			DM_INT,		OPTION_SECONDS_TO_RUN);
+	datamap_add(properties_datamap, IDC_SECONDSTORUNDISP,		DM_INT,		OPTION_SECONDS_TO_RUN);
+	datamap_add(properties_datamap, IDC_THROTTLE,				DM_BOOL,	OPTION_THROTTLE);
+	datamap_add(properties_datamap, IDC_SLEEP,					DM_BOOL,	OPTION_SLEEP);
+	datamap_add(properties_datamap, IDC_SPEED,					DM_FLOAT,	OPTION_SPEED);
+	datamap_add(properties_datamap, IDC_SPEEDDISP,				DM_FLOAT,	OPTION_SPEED);
+	datamap_add(properties_datamap, IDC_REFRESHSPEED,			DM_BOOL,	OPTION_REFRESHSPEED);
+	datamap_add(properties_datamap, IDC_LOWLATENCY,				DM_BOOL,	OPTION_LOWLATENCY);
+	// core rotation options
+	datamap_add(properties_datamap, IDC_ROTATE,					DM_INT,		NULL);
+	// ror, rol, autoror, autorol handled by callback
+	datamap_add(properties_datamap, IDC_FLIPX,					DM_BOOL,	OPTION_FLIPX);
+	datamap_add(properties_datamap, IDC_FLIPY,					DM_BOOL,	OPTION_FLIPY);
+	// core artwork options
+	datamap_add(properties_datamap, IDC_ARTWORK_CROP,			DM_BOOL,	OPTION_ARTWORK_CROP);
+	// core screen options
+	datamap_add(properties_datamap, IDC_BRIGHTCORRECT,			DM_FLOAT,	OPTION_BRIGHTNESS);
+	datamap_add(properties_datamap, IDC_BRIGHTCORRECTDISP,		DM_FLOAT,	OPTION_BRIGHTNESS);
+	datamap_add(properties_datamap, IDC_CONTRAST,				DM_FLOAT,	OPTION_CONTRAST);
+	datamap_add(properties_datamap, IDC_CONTRASTDISP,			DM_FLOAT,	OPTION_CONTRAST);
+	datamap_add(properties_datamap, IDC_GAMMA,					DM_FLOAT,	OPTION_GAMMA);
+	datamap_add(properties_datamap, IDC_GAMMADISP,				DM_FLOAT,	OPTION_GAMMA);
+	datamap_add(properties_datamap, IDC_PAUSEBRIGHT,			DM_FLOAT,	OPTION_PAUSE_BRIGHTNESS);
+	datamap_add(properties_datamap, IDC_PAUSEBRIGHTDISP,		DM_FLOAT,	OPTION_PAUSE_BRIGHTNESS);
+	datamap_add(properties_datamap, IDC_EFFECT,					DM_STRING,	OPTION_EFFECT);
+	datamap_add(properties_datamap, IDC_WIDESTRETCH,			DM_BOOL,	OPTION_WIDESTRETCH);
+	datamap_add(properties_datamap, IDC_UNEVENSTRETCH,			DM_BOOL,	OPTION_UNEVENSTRETCH);
+	datamap_add(properties_datamap, IDC_UNEVENSTRETCHX,			DM_BOOL,	OPTION_UNEVENSTRETCHX);
+	datamap_add(properties_datamap, IDC_UNEVENSTRETCHY,			DM_BOOL,	OPTION_UNEVENSTRETCHY);
+	datamap_add(properties_datamap, IDC_AUTOSTRETCHXY,			DM_BOOL,	OPTION_AUTOSTRETCHXY);
+	datamap_add(properties_datamap, IDC_INTOVERSCAN,			DM_BOOL,	OPTION_INTOVERSCAN);
+	datamap_add(properties_datamap, IDC_INTSCALEX,				DM_INT,		OPTION_INTSCALEX);
+	datamap_add(properties_datamap, IDC_INTSCALEX_TXT,			DM_INT,		OPTION_INTSCALEX);
+	datamap_add(properties_datamap, IDC_INTSCALEY,				DM_INT,		OPTION_INTSCALEY);
+	datamap_add(properties_datamap, IDC_INTSCALEY_TXT,			DM_INT,		OPTION_INTSCALEY);
+	// core opengl - bgfx options
+	datamap_add(properties_datamap, IDC_GLSLPOW,				DM_BOOL,	OSDOPTION_GL_FORCEPOW2TEXTURE);
+	datamap_add(properties_datamap, IDC_GLSLTEXTURE,			DM_BOOL,	OSDOPTION_GL_NOTEXTURERECT);
+	datamap_add(properties_datamap, IDC_GLSLVBO,				DM_BOOL,	OSDOPTION_GL_VBO);
+	datamap_add(properties_datamap, IDC_GLSLPBO,				DM_BOOL,	OSDOPTION_GL_PBO);
+	datamap_add(properties_datamap, IDC_GLSL,					DM_BOOL,	OSDOPTION_GL_GLSL);
+	datamap_add(properties_datamap, IDC_GLSLFILTER,				DM_STRING,	OSDOPTION_GLSL_FILTER);
+	datamap_add(properties_datamap, IDC_GLSLSYNC,				DM_BOOL,	OSDOPTION_GLSL_SYNC);
+	datamap_add(properties_datamap, IDC_BGFX_CHAINS,			DM_STRING,	OSDOPTION_BGFX_SCREEN_CHAINS);
+	datamap_add(properties_datamap, IDC_BGFX_BACKEND,			DM_STRING,	OSDOPTION_BGFX_BACKEND);
+
+	// opengl shaders
+	datamap_add(properties_datamap, IDC_MAME_SHADER0,			DM_STRING,	OSDOPTION_SHADER_MAME "0");
+	datamap_add(properties_datamap, IDC_MAME_SHADER1,			DM_STRING,	OSDOPTION_SHADER_MAME "1");
+	datamap_add(properties_datamap, IDC_MAME_SHADER2,			DM_STRING,	OSDOPTION_SHADER_MAME "2");
+	datamap_add(properties_datamap, IDC_MAME_SHADER3,			DM_STRING,	OSDOPTION_SHADER_MAME "3");
+	datamap_add(properties_datamap, IDC_MAME_SHADER4,			DM_STRING,	OSDOPTION_SHADER_MAME "4");
+	datamap_add(properties_datamap, IDC_SCREEN_SHADER0,			DM_STRING,	OSDOPTION_SHADER_SCREEN "0");
+	datamap_add(properties_datamap, IDC_SCREEN_SHADER1,			DM_STRING,	OSDOPTION_SHADER_SCREEN "1");
+	datamap_add(properties_datamap, IDC_SCREEN_SHADER2,			DM_STRING,	OSDOPTION_SHADER_SCREEN "2");
+	datamap_add(properties_datamap, IDC_SCREEN_SHADER3,			DM_STRING,	OSDOPTION_SHADER_SCREEN "3");
+	datamap_add(properties_datamap, IDC_SCREEN_SHADER4,			DM_STRING,	OSDOPTION_SHADER_SCREEN "4");
+	// core vector options
+	datamap_add(properties_datamap, IDC_BEAM_MIN,				DM_FLOAT,	OPTION_BEAM_WIDTH_MIN);
+	datamap_add(properties_datamap, IDC_BEAM_MINDISP,			DM_FLOAT,	OPTION_BEAM_WIDTH_MIN);
+	datamap_add(properties_datamap, IDC_BEAM_MAX,				DM_FLOAT,	OPTION_BEAM_WIDTH_MAX);
+	datamap_add(properties_datamap, IDC_BEAM_MAXDISP,			DM_FLOAT,	OPTION_BEAM_WIDTH_MAX);
+	datamap_add(properties_datamap, IDC_BEAM_INTEN,				DM_FLOAT,	OPTION_BEAM_INTENSITY_WEIGHT);
+	datamap_add(properties_datamap, IDC_BEAM_INTENDISP,			DM_FLOAT,	OPTION_BEAM_INTENSITY_WEIGHT);
+	datamap_add(properties_datamap, IDC_FLICKER,				DM_FLOAT,	OPTION_FLICKER);
+	datamap_add(properties_datamap, IDC_FLICKERDISP,			DM_FLOAT,	OPTION_FLICKER);
+	// core sound options
+	datamap_add(properties_datamap, IDC_SOUND_MODE,				DM_STRING,	OSDOPTION_SOUND);
+	datamap_add(properties_datamap, IDC_SAMPLERATE,				DM_INT,		OPTION_SAMPLERATE);
+	datamap_add(properties_datamap, IDC_SAMPLES,				DM_BOOL,	OPTION_SAMPLES);
+	datamap_add(properties_datamap, IDC_VOLUME,					DM_INT,		OPTION_VOLUME);
+	datamap_add(properties_datamap, IDC_VOLUMEDISP,				DM_INT,		OPTION_VOLUME);
+	// core input options
+	datamap_add(properties_datamap, IDC_COINLOCKOUT,			DM_BOOL,	OPTION_COIN_LOCKOUT);
+	datamap_add(properties_datamap, IDC_DEFAULT_INPUT,			DM_STRING,	OPTION_CTRLR);
+	datamap_add(properties_datamap, IDC_USE_MOUSE,				DM_BOOL,	OPTION_MOUSE);
+	datamap_add(properties_datamap, IDC_JOYSTICK,				DM_BOOL,	OPTION_JOYSTICK);
+	datamap_add(properties_datamap, IDC_LIGHTGUN,				DM_BOOL,	OPTION_LIGHTGUN);
+	datamap_add(properties_datamap, IDC_STEADYKEY,				DM_BOOL,	OPTION_STEADYKEY);
+	datamap_add(properties_datamap, IDC_MULTIKEYBOARD,			DM_BOOL,	OPTION_MULTIKEYBOARD);
+	datamap_add(properties_datamap, IDC_MULTIMOUSE,				DM_BOOL,	OPTION_MULTIMOUSE);
+	datamap_add(properties_datamap, IDC_JDZ,					DM_FLOAT,	OPTION_JOYSTICK_DEADZONE);
+	datamap_add(properties_datamap, IDC_JDZDISP,				DM_FLOAT,	OPTION_JOYSTICK_DEADZONE);
+	datamap_add(properties_datamap, IDC_JSAT,					DM_FLOAT,	OPTION_JOYSTICK_SATURATION);
+	datamap_add(properties_datamap, IDC_JSATDISP,				DM_FLOAT,	OPTION_JOYSTICK_SATURATION);
+	datamap_add(properties_datamap, IDC_JOYSTICKMAP,			DM_STRING,	OPTION_JOYSTICK_MAP);
+	// core input automatic enable options
+	datamap_add(properties_datamap, IDC_PADDLE,					DM_STRING,	OPTION_PADDLE_DEVICE);
+	datamap_add(properties_datamap, IDC_ADSTICK,				DM_STRING,	OPTION_ADSTICK_DEVICE);
+	datamap_add(properties_datamap, IDC_PEDAL,					DM_STRING,	OPTION_PEDAL_DEVICE);
+	datamap_add(properties_datamap, IDC_DIAL,					DM_STRING,	OPTION_DIAL_DEVICE);
+	datamap_add(properties_datamap, IDC_TRACKBALL,				DM_STRING,	OPTION_TRACKBALL_DEVICE);
+	datamap_add(properties_datamap, IDC_LIGHTGUNDEVICE,			DM_STRING,	OPTION_LIGHTGUN_DEVICE);
+	datamap_add(properties_datamap, IDC_POSITIONAL,				DM_STRING,	OPTION_POSITIONAL_DEVICE);
+	datamap_add(properties_datamap, IDC_MOUSE,					DM_STRING,	OPTION_MOUSE_DEVICE);
+	// core misc options
+	datamap_add(properties_datamap, IDC_BIOS,					DM_STRING,	OPTION_BIOS);
+	datamap_add(properties_datamap, IDC_CHEAT,					DM_BOOL,	OPTION_CHEAT);
+	datamap_add(properties_datamap, IDC_DEBUG,					DM_BOOL,	OPTION_DEBUG);
+	datamap_add(properties_datamap, IDC_LOGERROR,				DM_BOOL,	OPTION_LOG);
+	datamap_add(properties_datamap, IDC_SKIP_GAME_INFO,			DM_BOOL,	OPTION_SKIP_GAMEINFO);
+	datamap_add(properties_datamap, IDC_CONFIRM_QUIT,			DM_BOOL,	OPTION_CONFIRM_QUIT);
+	datamap_add(properties_datamap, IDC_ENABLE_MOUSE_UI,		DM_BOOL,	OPTION_UI_MOUSE);
+	datamap_add(properties_datamap, IDC_CHEATFILE,				DM_STRING,	OPTION_CHEATPATH);
+	datamap_add(properties_datamap, IDC_LANGUAGE,				DM_STRING,	OPTION_LANGUAGE);
+	datamap_add(properties_datamap, IDC_LUASCRIPT,				DM_STRING,	OPTION_AUTOBOOT_SCRIPT);
+	datamap_add(properties_datamap, IDC_BOOTDELAY,				DM_INT,		OPTION_AUTOBOOT_DELAY);
+	datamap_add(properties_datamap, IDC_BOOTDELAYDISP,			DM_INT,		OPTION_AUTOBOOT_DELAY);
+	datamap_add(properties_datamap, IDC_PLUGINS,				DM_BOOL,	OPTION_PLUGINS);
+	datamap_add(properties_datamap, IDC_PLUGIN,					DM_STRING,	OPTION_PLUGIN);
+	datamap_add(properties_datamap, IDC_NVRAM_SAVE,				DM_BOOL,	OPTION_NVRAM_SAVE);
+	datamap_add(properties_datamap, IDC_REWIND,					DM_BOOL,	OPTION_REWIND);
+	datamap_add(properties_datamap, IDC_DRC_CORE,				DM_BOOL,	OPTION_DRC);
+	// windows performance options
+	datamap_add(properties_datamap, IDC_HIGH_PRIORITY,			DM_INT,		WINOPTION_PRIORITY);
+	datamap_add(properties_datamap, IDC_HIGH_PRIORITYTXT,		DM_INT,		WINOPTION_PRIORITY);
+	// windows video options
+	datamap_add(properties_datamap, IDC_VIDEO_MODE,				DM_STRING,	OSDOPTION_VIDEO);
+	datamap_add(properties_datamap, IDC_NUMSCREENS,				DM_INT,		OSDOPTION_NUMSCREENS);
+	datamap_add(properties_datamap, IDC_NUMSCREENSDISP,			DM_INT,		OSDOPTION_NUMSCREENS);
+	datamap_add(properties_datamap, IDC_WINDOWED,				DM_BOOL,	OSDOPTION_WINDOW);
+	datamap_add(properties_datamap, IDC_MAXIMIZE,				DM_BOOL,	OSDOPTION_MAXIMIZE);
+	datamap_add(properties_datamap, IDC_KEEPASPECT,				DM_BOOL,	OPTION_KEEPASPECT);
+	datamap_add(properties_datamap, IDC_PRESCALE,				DM_INT,		OSDOPTION_PRESCALE);
+	datamap_add(properties_datamap, IDC_PRESCALEDISP,			DM_INT,		OSDOPTION_PRESCALE);
+	datamap_add(properties_datamap, IDC_WAITVSYNC,				DM_BOOL,	OSDOPTION_WAITVSYNC);
+	datamap_add(properties_datamap, IDC_SYNCREFRESH,			DM_BOOL,	OPTION_SYNCREFRESH);
+	datamap_add(properties_datamap, IDC_D3D_FILTER,				DM_BOOL,	OSDOPTION_FILTER);
+	// per window video options
+	datamap_add(properties_datamap, IDC_SCREEN,					DM_STRING,	NULL);
+	datamap_add(properties_datamap, IDC_SCREENSELECT,			DM_STRING,	NULL);
+	datamap_add(properties_datamap, IDC_VIEW,					DM_STRING,	NULL);
+	datamap_add(properties_datamap, IDC_ASPECTRATIOD,			DM_STRING,  NULL);
+	datamap_add(properties_datamap, IDC_ASPECTRATION,			DM_STRING,  NULL);
+	datamap_add(properties_datamap, IDC_REFRESH,				DM_STRING,  NULL);
+	datamap_add(properties_datamap, IDC_SIZES,					DM_STRING,  NULL);
+	// full screen options
+	datamap_add(properties_datamap, IDC_TRIPLE_BUFFER,			DM_BOOL,	WINOPTION_TRIPLEBUFFER);
+	datamap_add(properties_datamap, IDC_SWITCHRES,				DM_BOOL,	OSDOPTION_SWITCHRES);
+	datamap_add(properties_datamap, IDC_FSBRIGHTNESS,			DM_FLOAT,	WINOPTION_FULLSCREENBRIGHTNESS);
+	datamap_add(properties_datamap, IDC_FSBRIGHTNESSDISP,		DM_FLOAT,	WINOPTION_FULLSCREENBRIGHTNESS);
+	datamap_add(properties_datamap, IDC_FSCONTRAST,				DM_FLOAT,	WINOPTION_FULLSCREENCONTRAST);
+	datamap_add(properties_datamap, IDC_FSCONTRASTDISP,			DM_FLOAT,	WINOPTION_FULLSCREENCONTRAST);
+	datamap_add(properties_datamap, IDC_FSGAMMA,				DM_FLOAT,	WINOPTION_FULLSCREENGAMMA);
+	datamap_add(properties_datamap, IDC_FSGAMMADISP,			DM_FLOAT,	WINOPTION_FULLSCREENGAMMA);
+	// windows sound options
+	datamap_add(properties_datamap, IDC_AUDIO_LATENCY,			DM_FLOAT,		OSDOPTION_AUDIO_LATENCY);
+	datamap_add(properties_datamap, IDC_AUDIO_LATENCY_DISP,		DM_FLOAT,		OSDOPTION_AUDIO_LATENCY);
+	// input device options
+	datamap_add(properties_datamap, IDC_DUAL_LIGHTGUN,			DM_BOOL,	WINOPTION_DUAL_LIGHTGUN);
+	// hlsl
+	datamap_add(properties_datamap, IDC_HLSL_ON,				DM_BOOL,	WINOPTION_HLSL_ENABLE);
+	//缘来是你
+	datamap_add(properties_datamap, IDC_IPS_LIST,               DM_STRING,  OPTION_IPS);
+	datamap_add(properties_datamap, IDC_SKIP_CRC_CHECK, 		DM_BOOL, 	OPTION_SKIP_CRC_CHECK);
+	datamap_add(properties_datamap, IDC_PGM2_MEMCARD_HACK, 		DM_BOOL, 	OPTION_PGM2_MEMCARD_HACK);
+	
+	// set up callbacks
+	datamap_set_callback(properties_datamap, IDC_ROTATE,		DCT_READ_CONTROL,		RotateReadControl);
+	datamap_set_callback(properties_datamap, IDC_ROTATE,		DCT_POPULATE_CONTROL,	RotatePopulateControl);
+	datamap_set_callback(properties_datamap, IDC_SCREEN,		DCT_READ_CONTROL,		ScreenReadControl);
+	datamap_set_callback(properties_datamap, IDC_SCREEN,		DCT_POPULATE_CONTROL,	ScreenPopulateControl);
+	datamap_set_callback(properties_datamap, IDC_VIEW,			DCT_POPULATE_CONTROL,	ViewPopulateControl);
+	datamap_set_callback(properties_datamap, IDC_REFRESH,		DCT_READ_CONTROL,		ResolutionReadControl);
+	datamap_set_callback(properties_datamap, IDC_REFRESH,		DCT_POPULATE_CONTROL,	ResolutionPopulateControl);
+	datamap_set_callback(properties_datamap, IDC_SIZES,			DCT_READ_CONTROL,		ResolutionReadControl);
+	datamap_set_callback(properties_datamap, IDC_SIZES,			DCT_POPULATE_CONTROL,	ResolutionPopulateControl);
+	datamap_set_callback(properties_datamap, IDC_DEFAULT_INPUT,	DCT_READ_CONTROL,		DefaultInputReadControl);
+	datamap_set_callback(properties_datamap, IDC_DEFAULT_INPUT,	DCT_POPULATE_CONTROL,	DefaultInputPopulateControl);
+	datamap_set_option_name_callback(properties_datamap, IDC_VIEW,		ViewSetOptionName);
+	//missing population of views with per game defined additional views
+	datamap_set_option_name_callback(properties_datamap, IDC_REFRESH,	ResolutionSetOptionName);
+	datamap_set_option_name_callback(properties_datamap, IDC_SIZES,		ResolutionSetOptionName);
+	// formats
+	datamap_set_int_format(properties_datamap, IDC_VOLUMEDISP,			"%ddB");
+	datamap_set_float_format(properties_datamap, IDC_AUDIO_LATENCY_DISP,"%2.1f");
+	datamap_set_float_format(properties_datamap, IDC_BEAM_MINDISP,		"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_BEAM_MAXDISP,		"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_BEAM_INTENDISP,	"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_FLICKERDISP,		"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_GAMMADISP,			"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_BRIGHTCORRECTDISP,	"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_CONTRASTDISP,		"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_PAUSEBRIGHTDISP,	"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_FSGAMMADISP,		"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_FSBRIGHTNESSDISP,	"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_FSCONTRASTDISP,	"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_JDZDISP,			"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_JSATDISP,			"%3.2f");
+	datamap_set_float_format(properties_datamap, IDC_SPEEDDISP,			"%3.1f");
+	// trackbar ranges - slider-name,start,end,step
+	datamap_set_trackbar_range(properties_datamap, IDC_JDZ,         	0.00, 1.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_JSAT,        	0.00, 1.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_SPEED,       	0.1, 100.00, 0.1);
+	datamap_set_trackbar_range(properties_datamap, IDC_BEAM_MIN,        0.00, 1.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_BEAM_MAX,        1.00, 10.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_BEAM_INTEN,      -10.00, 10.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_FLICKER,       	0.00, 1.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_AUDIO_LATENCY,   0.0, 10.0, 0.1);
+	datamap_set_trackbar_range(properties_datamap, IDC_VOLUME,      	-32, 0, 1);
+	datamap_set_trackbar_range(properties_datamap, IDC_HIGH_PRIORITY, 	-15, 1, 1);
+	datamap_set_trackbar_range(properties_datamap, IDC_SECONDSTORUN, 	0, 60, 1);
+	datamap_set_trackbar_range(properties_datamap, IDC_NUMSCREENS, 		1, 4, 1);
+	datamap_set_trackbar_range(properties_datamap, IDC_PRESCALE, 		1, 20, 1);
+	datamap_set_trackbar_range(properties_datamap, IDC_FSGAMMA, 		0.10, 3.00, 0.05);
+	datamap_set_trackbar_range(properties_datamap, IDC_FSBRIGHTNESS, 	0.10, 2.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_FSCONTRAST, 		0.10, 2.00, 0.05);
+	datamap_set_trackbar_range(properties_datamap, IDC_GAMMA, 			0.10, 3.00, 0.05);
+	datamap_set_trackbar_range(properties_datamap, IDC_BRIGHTCORRECT, 	0.10, 2.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_CONTRAST, 		0.10, 2.00, 0.05);
+	datamap_set_trackbar_range(properties_datamap, IDC_PAUSEBRIGHT, 	0.00, 1.00, 0.01);
+	datamap_set_trackbar_range(properties_datamap, IDC_BOOTDELAY, 		0, 5, 1);
+	datamap_set_trackbar_range(properties_datamap, IDC_INTSCALEX, 		0, 10, 1);
+	datamap_set_trackbar_range(properties_datamap, IDC_INTSCALEY, 		0, 10, 1);
+	//缘来是你
+    datamap_set_callback(properties_datamap, IDC_IPS_LIST,		DCT_READ_CONTROL,		IPSReadControl);		// IPS
+	datamap_set_callback(properties_datamap, IDC_IPS_LIST,		DCT_POPULATE_CONTROL,	IPSPopulateControl);	// IPS
+}
+
+//mamefx: for coloring of changed elements
+static bool IsControlOptionValue(HWND hDlg, HWND hWnd_ctrl, windows_options &opts, windows_options &ref)
+{
+	const char *option_name = datamap_get_control_option_name(properties_datamap, hDlg, hWnd_ctrl);
+
+	if (option_name == NULL)
+		return true;
+
+	const char *opts_value = opts.value(option_name);
+	const char *ref_value = ref.value(option_name);
+
+	if (opts_value == ref_value)
+		return true;
+
+	if (!opts_value || !ref_value)
+		return false;
+
+	return strcmp(opts_value, ref_value) == 0;
+}
+
+/* Moved here cause it's called in a few places */
+static void InitializeOptions(HWND hDlg)
+{
+	InitializeSampleRateUI(hDlg);
+	InitializeSoundModeUI(hDlg);
+	InitializeSkippingUI(hDlg);
+	InitializeRotateUI(hDlg);
+	InitializeSelectScreenUI(hDlg);
+	InitializeBIOSUI(hDlg);
+	InitializeControllerMappingUI(hDlg);
+	InitializeVideoUI(hDlg);
+	InitializeSnapViewUI(hDlg);
+	InitializeSnapNameUI(hDlg);
+	InitializeLanguageUI(hDlg);
+	InitializePluginsUI(hDlg);
+	InitializeGLSLFilterUI(hDlg);
+	InitializeBGFXBackendUI(hDlg);
+}
+
+static void OptOnHScroll(HWND hWnd, HWND hWndCtl, UINT code, int pos)
+{
+	if (hWndCtl == GetDlgItem(hWnd, IDC_NUMSCREENS))
+		NumScreensSelectionChange(hWnd);
+}
+
+/* Handle changes to the Numscreens slider */
+static void NumScreensSelectionChange(HWND hWnd)
+{
+	//Also Update the ScreenSelect Combo with the new number of screens
+	UpdateSelectScreenUI(hWnd );
+}
+
+/* Handle changes to the Refresh drop down */
+static void RefreshSelectionChange(HWND hWnd, HWND hWndCtrl)
+{
+	int nCurSelection = ComboBox_GetCurSel(hWndCtrl);
+
+	if (nCurSelection != CB_ERR)
+	{
+		datamap_read_control(properties_datamap, hWnd, m_CurrentOpts, IDC_SIZES);
+		datamap_populate_control(properties_datamap, hWnd, m_CurrentOpts, IDC_SIZES);
+	}
+}
+
+/* Populate the Sample Rate drop down */
+static void InitializeSampleRateUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SAMPLERATE);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMSAMPLERATE; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxSampleRate[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxSampleRate[i].m_pData);
+		}
+	}
+}
+
+/* Populate the Sound Mode drop down */
+static void InitializeSoundModeUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SOUND_MODE);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMSOUND; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxSound[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxSound[i].m_pData);
+		}
+	}
+}
+
+/* Populate the Frame Skipping drop down */
+static void InitializeSkippingUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_FRAMESKIP);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMFRAMESKIP; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxFrameSkip[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxFrameSkip[i].m_pData);
+		}
+	}
+}
+
+/* Populate the Rotate drop down */
+static void InitializeRotateUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_ROTATE);
+
+	if (hCtrl)
+	{
+		(void)ComboBox_AddString(hCtrl, TEXT("默认"));             // 0
+		(void)ComboBox_AddString(hCtrl, TEXT("顺时针"));           // 1
+		(void)ComboBox_AddString(hCtrl, TEXT("逆时针"));      // 2
+		(void)ComboBox_AddString(hCtrl, TEXT("无"));                // 3
+		(void)ComboBox_AddString(hCtrl, TEXT("自动顺时针"));      // 4
+		(void)ComboBox_AddString(hCtrl, TEXT("自动逆时针")); // 5
+	}
+}
+
+/* Populate the Video Mode drop down */
+static void InitializeVideoUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_VIDEO_MODE);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMVIDEO; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxVideo[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxVideo[i].m_pData);
+		}
+	}
+}
+
+static void InitializeSnapNameUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SNAPNAME);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMSNAPNAME; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxSnapName[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxSnapName[i].m_pData);
+		}
+	}
+}
+
+static void InitializeSnapViewUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SNAPVIEW);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMSNAPVIEW; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxSnapView[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxSnapView[i].m_pData);
+		}
+	}
+}
+
+static void UpdateSelectScreenUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SCREENSELECT);
+
+	if (hCtrl)
+	{
+		int curSel = ComboBox_GetCurSel(hCtrl);
+		int i = 0;
+
+		if ((curSel < 0) || (curSel >= NUMSELECTSCREEN))
+			curSel = 0;
+
+		(void)ComboBox_ResetContent(hCtrl);
+
+		for (i = 0; i < NUMSELECTSCREEN && i < m_CurrentOpts.int_value(OSDOPTION_NUMSCREENS) ; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxSelectScreen[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxSelectScreen[i].m_pData);
+		}
+
+		// Smaller Amount of screens was selected, so use 0
+		if (i < curSel)
+			(void)ComboBox_SetCurSel(hCtrl, 0);
+		else
+			(void)ComboBox_SetCurSel(hCtrl, curSel);
+	}
+}
+
+/* Populate the Select Screen drop down */
+static void InitializeSelectScreenUI(HWND hWnd)
+{
+	UpdateSelectScreenUI(hWnd);
+}
+
+static void InitializeControllerMappingUI(HWND hWnd)
+{
+	HWND hCtrl  = GetDlgItem(hWnd, IDC_PADDLE);
+	HWND hCtrl1 = GetDlgItem(hWnd, IDC_ADSTICK);
+	HWND hCtrl2 = GetDlgItem(hWnd, IDC_PEDAL);
+	HWND hCtrl3 = GetDlgItem(hWnd, IDC_MOUSE);
+	HWND hCtrl4 = GetDlgItem(hWnd, IDC_DIAL);
+	HWND hCtrl5 = GetDlgItem(hWnd, IDC_TRACKBALL);
+	HWND hCtrl6 = GetDlgItem(hWnd, IDC_LIGHTGUNDEVICE);
+	HWND hCtrl7 = GetDlgItem(hWnd, IDC_POSITIONAL);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+
+	if (hCtrl1)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl1, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl1, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+
+	if (hCtrl2)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl2, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl2, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+
+	if (hCtrl3)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl3, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl3, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+
+	if (hCtrl4)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl4, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl4, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+
+	if (hCtrl5)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl5, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl5, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+
+	if (hCtrl6)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl6, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl6, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+
+	if (hCtrl7)
+	{
+		for (int i = 0; i < NUMDEVICES; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl7, i, g_ComboBoxDevice[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl7, i, g_ComboBoxDevice[i].m_pData);
+		}
+	}
+}
+// 缘来是你
+/*************** eziochiu 添加 IPS *****************/
+static void InitializeIPSUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_IPS_LIST);
+	if (!hCtrl) return;
+
+	ListBox_ResetContent(hCtrl);
+
+	int nParentIndex = -1;
+	if (DriverIsClone(g_nGame))
+		nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+
+	int count = GetPatchCount(g_nGame, nParentIndex);
+	for (int i = 0; i < count; i++)
+	{
+		const char* filename = GetPatchFilename(g_nGame, nParentIndex, i);
+		if (filename)
+		{
+			wchar_t* wfilename = win_wstring_from_utf8(filename);
+			int idx = ListBox_AddString(hCtrl, wfilename);
+			ListBox_SetItemData(hCtrl, idx, i);
+			free(wfilename);
+		}
+	}
+}
+
+static bool IPSPopulateControl(datamap *map, HWND hDlg, HWND hWndCtrl, windows_options &opts, const char *option_name)
+{
+	return true;
+}
+
+static bool IPSReadControl(datamap *map, HWND hDlg, HWND hWndCtrl, windows_options &opts, const char *option_name)
+{
+	std::string new_val = "";
+	int count = ListBox_GetCount(hWndCtrl);
+	for (int i = 0; i < count; i++)
+	{
+		if (ListBox_GetSel(hWndCtrl, i))
+		{
+			wchar_t wbuf[256];
+			ListBox_GetText(hWndCtrl, i, wbuf);
+			char* filename = win_utf8_from_wstring(wbuf);
+			if (!new_val.empty()) new_val += ",";
+			new_val += filename;
+			free(filename);
+		}
+	}
+	opts.set_value(option_name, new_val.c_str(), OPTION_PRIORITY_CMDLINE);
+	return true;
+}
+
+static void IPSSelectionChange(HWND hDlg, HWND hWndCtrl)
+{
+	int count = ListBox_GetCount(hWndCtrl);
+	int sel_idx = -1;
+	for (int i=0; i<count; i++) {
+		if (ListBox_GetSel(hWndCtrl, i)) {
+			sel_idx = i;
+			break;
+		}
+	}
+
+	if (sel_idx != -1) {
+		int nPatchIndex = (int)ListBox_GetItemData(hWndCtrl, sel_idx);
+		int nParentIndex = -1;
+		if (DriverIsClone(g_nGame)) nParentIndex = GetParentIndex(&driver_list::driver(g_nGame));
+		
+		const char* desc = GetPatchDesc(g_nGame, nParentIndex, nPatchIndex);
+		if (desc) {
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_IPS_DESC), desc);
+		} else {
+			winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_IPS_DESC), "");
+		}
+	} else {
+		winui_set_window_text_utf8(GetDlgItem(hDlg, IDC_IPS_DESC), "");
+	}
+}
+/**************************************************/
+
+static void InitializeBIOSUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_BIOS);
+
+	if (hCtrl)
+	{
+		const game_driver *gamedrv = &driver_list::driver(g_nGame);
+		int i = 0;
+
+		if (g_nGame == GLOBAL_OPTIONS)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, TEXT("无"));
+			(void)ComboBox_SetItemData(hCtrl, i++, "");
+			return;
+		}
+
+		if (g_nGame == FOLDER_OPTIONS)
+		{
+			gamedrv = &driver_list::driver(g_nFolderGame);
+
+			if (DriverHasOptionalBIOS(g_nFolderGame) == false)
+			{
+				(void)ComboBox_InsertString(hCtrl, i, TEXT("无"));
+				(void)ComboBox_SetItemData(hCtrl, i++, "");
+				return;
+			}
+			
+			(void)ComboBox_InsertString(hCtrl, i, TEXT("默认"));
+			(void)ComboBox_SetItemData(hCtrl, i++, "default");
+
+			if (gamedrv->rom)
+			{
+				auto rom_entries = rom_build_entries(gamedrv->rom);
+				
+				for (const rom_entry *rom = rom_entries.data(); !ROMENTRY_ISEND(rom); rom++)
+				{
+					if (ROMENTRY_ISSYSTEM_BIOS(rom))
+					{
+						const char *name = rom->hashdata().c_str();
+						wchar_t *t_s = win_wstring_from_utf8(name);
+
+						if(!t_s)
+							return;
+
+						(void)ComboBox_InsertString(hCtrl, i, t_s);
+						free(t_s);
+						const char *biosname = core_strdup(ROM_GETNAME(rom));
+						(void)ComboBox_SetItemData(hCtrl, i++, biosname);
+
+						if (ROMENTRY_ISDEFAULT_BIOS(rom))
+							(void)ComboBox_SetItemData( hCtrl, 0, biosname);
+						biosname = nullptr;
+					}
+				}
+			}
+
+			return;
+		}
+
+		if (DriverHasOptionalBIOS(g_nGame) == false)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, TEXT("无"));
+			(void)ComboBox_SetItemData(hCtrl, i++, "");
+			return;
+		}
+
+		(void)ComboBox_InsertString(hCtrl, i, TEXT("默认"));
+		(void)ComboBox_SetItemData(hCtrl, i++, "");
+
+		if (gamedrv->rom)
+		{
+			auto rom_entries = rom_build_entries(gamedrv->rom);
+
+			for (const rom_entry *rom = rom_entries.data(); !ROMENTRY_ISEND(rom); rom++)
+			{
+				if (ROMENTRY_ISSYSTEM_BIOS(rom))
+				{
+					const char *name = rom->hashdata().c_str();
+					wchar_t *t_s = win_wstring_from_utf8(name);
+
+					if(!t_s)
+						return;
+
+					(void)ComboBox_InsertString(hCtrl, i, t_s);
+					free(t_s);
+					const char *biosname = core_strdup(ROM_GETNAME(rom));
+					(void)ComboBox_SetItemData(hCtrl, i++, biosname);
+					biosname = nullptr;
+				}
+			}
+		}
+	}
+}
+
+static void InitializeLanguageUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_LANGUAGE);
+
+	if (hCtrl)
+	{
+		int count = 0;
+		osd::directory::ptr directory = osd::directory::open(GetLanguageDir());
+
+		if (directory == nullptr)
+			return;
+
+		for (const osd::directory::entry *entry = directory->read(); entry; entry = directory->read())
+		{
+			if (entry->type == osd::directory::entry::entry_type::DIR)
+			{
+				std::string name = entry->name;
+				
+				if (!(name == "." || name == ".."))
+				{
+					const char *value = core_strdup(entry->name);
+					wchar_t *text = win_wstring_from_utf8(entry->name);
+					(void)ComboBox_InsertString(hCtrl, count, text);
+					(void)ComboBox_SetItemData(hCtrl, count, value);
+					count++;
+					free(text);
+					value = NULL;
+				}
+			}
+		}
+
+		directory.reset();
+	}
+}
+
+static void InitializePluginsUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SELECT_PLUGIN);
+
+	if (hCtrl)
+	{
+		int count = 0;
+		osd::directory::ptr directory = osd::directory::open(GetPluginsDir());
+
+		if (directory == nullptr)
+			return;
+
+		for (const osd::directory::entry *entry = directory->read(); entry; entry = directory->read())
+		{
+			if (entry->type == osd::directory::entry::entry_type::DIR)
+			{
+				std::string name = entry->name;
+
+				if (!(name == "." || name == ".." || name == "json"))
+				{
+					const char *value = core_strdup(entry->name);
+					wchar_t *text = win_wstring_from_utf8(entry->name);
+					(void)ComboBox_InsertString(hCtrl, count, text);
+					(void)ComboBox_SetItemData(hCtrl, count, value);
+					count++;
+					free(text);
+					value = NULL;
+				}
+			}
+		}
+
+		directory.reset();
+	}
+
+	(void)ComboBox_SetCurSel(hCtrl, -1);
+	(void)ComboBox_SetCueBannerText(hCtrl, TEXT("选择插件"));
+}
+
+static void InitializeGLSLFilterUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_GLSLFILTER);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMGLSLFILTER; i++)
+		{
+			(void)ComboBox_InsertString(hCtrl, i, g_ComboBoxGLSLFilter[i].m_pText);
+			(void)ComboBox_SetItemData(hCtrl, i, g_ComboBoxGLSLFilter[i].m_pData);
+		}
+	}
+}
+
+static void InitializeBGFXBackendUI(HWND hWnd)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_BGFX_BACKEND);
+
+	if (hCtrl)
+	{
+		for (int i = 0; i < NUMBGFXBACKEND; i++)
+		{
+			ComboBox_InsertString(hCtrl, i, g_ComboBoxBGFXBackend[i].m_pText);
+			ComboBox_SetItemData(hCtrl, i, g_ComboBoxBGFXBackend[i].m_pData);
+		}
+	}
+}
+
+static bool SelectEffect(HWND hWnd)
+{
+	char filename[MAX_PATH];
+	bool changed = false;
+
+	*filename = 0;
+
+	if (CommonFileDialog(GetOpenFileName, filename, FILETYPE_EFFECT_FILES, false))
+	{
+		char option[MAX_PATH];
+		wchar_t *t_filename = win_wstring_from_utf8(filename);
+		wchar_t *tempname = PathFindFileName(t_filename);
+		PathRemoveExtension(tempname);
+		char *optname = win_utf8_from_wstring(tempname);
+		strcpy(option, optname);
+		free(t_filename);
+		free(optname);
+
+		if (strcmp(option, m_CurrentOpts.value(OPTION_EFFECT)))
+		{
+			m_CurrentOpts.set_value(OPTION_EFFECT, option, OPTION_PRIORITY_CMDLINE);
+			winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_EFFECT), option);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+static bool ResetEffect(HWND hWnd)
+{
+	bool changed = false;
+	const char *new_value = "none";
+
+	if (strcmp(new_value, m_CurrentOpts.value(OPTION_EFFECT)))
+	{
+		m_CurrentOpts.set_value(OPTION_EFFECT, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_EFFECT), "无");
+		changed = true;
+	}
+
+	return changed;
+}
+
+static bool SelectMameShader(HWND hWnd, int slot)
+{
+	char filename[MAX_PATH];
+	bool changed = false;
+	char shader[32];
+	int dialog = IDC_MAME_SHADER0 + slot;
+
+	*filename = 0;
+	snprintf(shader, std::size(shader), "glsl_shader_mame%d", slot);
+
+	if (CommonFileDialog(GetOpenFileName, filename, FILETYPE_SHADER_FILES, false))
+	{
+		char option[MAX_PATH];
+		wchar_t *t_filename = win_wstring_from_utf8(filename);
+		wchar_t *tempname = PathFindFileName(t_filename);
+		PathRemoveExtension(tempname);
+		char *optname = win_utf8_from_wstring(tempname);
+		strcpy(option, optname);
+		free(t_filename);
+		free(optname);
+
+		if (strcmp(option, m_CurrentOpts.value(shader)))
+		{
+			m_CurrentOpts.set_value(shader, option, OPTION_PRIORITY_CMDLINE);
+			winui_set_window_text_utf8(GetDlgItem(hWnd, dialog), option);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+static bool ResetMameShader(HWND hWnd, int slot)
+{
+	bool changed = false;
+	const char *new_value = "none";
+	char option[32];
+	int dialog = IDC_MAME_SHADER0 + slot;
+
+	snprintf(option, std::size(option), "glsl_shader_mame%d", slot);
+
+	if (strcmp(new_value, m_CurrentOpts.value(option)))
+	{
+		m_CurrentOpts.set_value(option, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, dialog), "无");
+		changed = true;
+	}
+
+	return changed;
+}
+
+static bool SelectScreenShader(HWND hWnd, int slot)
+{
+	char filename[MAX_PATH];
+	bool changed = false;
+	char shader[32];
+	int dialog = IDC_SCREEN_SHADER0 + slot;
+
+	*filename = 0;
+	snprintf(shader, std::size(shader), "glsl_shader_screen%d", slot);
+
+	if (CommonFileDialog(GetOpenFileName, filename, FILETYPE_SHADER_FILES, false))
+	{
+		char option[MAX_PATH];
+		wchar_t *t_filename = win_wstring_from_utf8(filename);
+		wchar_t *tempname = PathFindFileName(t_filename);
+		PathRemoveExtension(tempname);
+		char *optname = win_utf8_from_wstring(tempname);
+		strcpy(option, optname);
+		free(t_filename);
+		free(optname);
+
+		if (strcmp(option, m_CurrentOpts.value(shader)))
+		{
+			m_CurrentOpts.set_value(shader, option, OPTION_PRIORITY_CMDLINE);
+			winui_set_window_text_utf8(GetDlgItem(hWnd, dialog), option);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+static bool ResetScreenShader(HWND hWnd, int slot)
+{
+	bool changed = false;
+	const char *new_value = "none";
+	char option[32];
+	int dialog = IDC_SCREEN_SHADER0 + slot;
+
+	snprintf(option, std::size(option), "glsl_shader_screen%d", slot);
+
+	if (strcmp(new_value, m_CurrentOpts.value(option)))
+	{
+		m_CurrentOpts.set_value(option, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, dialog), "无");
+		changed = true;
+	}
+
+	return changed;
+}
+
+static void UpdateMameShader(HWND hWnd, int slot, windows_options &opts)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_MAME_SHADER0 + slot);
+
+	if (hCtrl)
+	{
+		char option[32];
+		snprintf(option, std::size(option), "glsl_shader_mame%d", slot);
+		const char* value = opts.value(option);
+
+		if (strcmp(value, "none") == 0)
+			winui_set_window_text_utf8(hCtrl, "无");
+		else
+			winui_set_window_text_utf8(hCtrl, value);
+	}
+}
+
+static void UpdateScreenShader(HWND hWnd, int slot, windows_options &opts)
+{
+	HWND hCtrl = GetDlgItem(hWnd, IDC_SCREEN_SHADER0 + slot);
+
+	if (hCtrl)
+	{
+		char option[32];
+		snprintf(option, std::size(option), "glsl_shader_screen%d", slot);
+		const char* value = opts.value(option);
+
+		if (strcmp(value, "none") == 0)
+			winui_set_window_text_utf8(hCtrl, "无");
+		else
+			winui_set_window_text_utf8(hCtrl, value);
+	}
+}
+
+static bool SelectCheatFile(HWND hWnd)
+{
+	char filename[MAX_PATH];
+	bool changed = false;
+
+	*filename = 0;
+
+	if (CommonFileDialog(GetOpenFileName, filename, FILETYPE_CHEAT_FILES, false))
+	{
+		char option[MAX_PATH];
+		char optvalue[MAX_PATH];
+		wchar_t *t_filename = win_wstring_from_utf8(filename);
+		wchar_t *t_cheatopt = win_wstring_from_utf8(filename);
+		wchar_t *tempname = PathFindFileName(t_filename);
+		PathRemoveExtension(tempname);
+		PathRemoveExtension(t_cheatopt);
+		char *optname = win_utf8_from_wstring(tempname);
+		char *cheatopt = win_utf8_from_wstring(t_cheatopt);
+		strcpy(option, optname);
+		strcpy(optvalue, cheatopt);
+		free(t_filename);
+		free(t_cheatopt);
+		free(optname);
+		free(cheatopt);
+
+		if (strcmp(optvalue, m_CurrentOpts.value(OPTION_CHEATPATH)))
+		{
+			m_CurrentOpts.set_value(OPTION_CHEATPATH, optvalue, OPTION_PRIORITY_CMDLINE);
+			winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_CHEATFILE), option);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+static bool ResetCheatFile(HWND hWnd)
+{
+	bool changed = false;
+	const char *new_value = "cheat";
+
+	if (strcmp(new_value, m_CurrentOpts.value(OPTION_CHEATPATH)))
+	{
+		m_CurrentOpts.set_value(OPTION_CHEATPATH, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_CHEATFILE), "Default");
+		changed = true;
+	}
+
+	return changed;
+}
+
+static BOOL ChangeFallback(HWND hWnd)
+{
+	BOOL changed = false;
+	char data[90];
+
+	winui_get_window_text_utf8(GetDlgItem(hWnd, IDC_ARTWORK_FALLBACK), data, std::size(data));
+
+	if (strcmp(data, m_CurrentOpts.value(OPTION_FALLBACK_ARTWORK)))
+	{
+		m_CurrentOpts.set_value(OPTION_FALLBACK_ARTWORK, data, OPTION_PRIORITY_CMDLINE);
+		changed = true;
+	}
+
+	return changed;
+}
+
+static BOOL ChangeOverride(HWND hWnd)
+{
+	BOOL changed = false;
+	char data[90];
+
+	winui_get_window_text_utf8(GetDlgItem(hWnd, IDC_ARTWORK_OVERRIDE), data, std::size(data));
+
+	if (strcmp(data, m_CurrentOpts.value(OPTION_OVERRIDE_ARTWORK)))
+	{
+		m_CurrentOpts.set_value(OPTION_OVERRIDE_ARTWORK, data, OPTION_PRIORITY_CMDLINE);
+		changed = true;
+	}
+
+	return changed;
+}
+
+static bool ChangeJoystickMap(HWND hWnd)
+{
+	bool changed = false;
+	char joymap[90];
+
+	winui_get_window_text_utf8(GetDlgItem(hWnd, IDC_JOYSTICKMAP), joymap, std::size(joymap));
+
+	if (strcmp(joymap, m_CurrentOpts.value(OPTION_JOYSTICK_MAP)))
+	{
+		m_CurrentOpts.set_value(OPTION_JOYSTICK_MAP, joymap, OPTION_PRIORITY_CMDLINE);
+		changed = true;
+	}
+
+	return changed;
+}
+
+static bool ResetJoystickMap(HWND hWnd)
+{
+	bool changed = false;
+	const char *new_value = "auto";
+
+	if (strcmp(new_value, m_CurrentOpts.value(OPTION_JOYSTICK_MAP)))
+	{
+		m_CurrentOpts.set_value(OPTION_JOYSTICK_MAP, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_JOYSTICKMAP), new_value);
+		changed = true;
+	}
+
+	return changed;
+}
+
+static bool SelectLUAScript(HWND hWnd)
+{
+	char filename[MAX_PATH];
+	bool changed = false;
+
+	*filename = 0;
+
+	if (CommonFileDialog(GetOpenFileName, filename, FILETYPE_LUASCRIPT_FILES, false))
+	{
+		char option[MAX_PATH];
+		char script[MAX_PATH];
+		wchar_t *t_filename = win_wstring_from_utf8(filename);
+		wchar_t *tempname = PathFindFileName(t_filename);
+		char *optvalue = win_utf8_from_wstring(tempname);
+		strcpy(script, optvalue);
+		PathRemoveExtension(tempname);
+		char *optname = win_utf8_from_wstring(tempname);
+		strcpy(option, optname);
+		free(t_filename);
+		free(optname);
+		free(optvalue);
+
+		if (strcmp(script, m_CurrentOpts.value(OPTION_AUTOBOOT_SCRIPT)))
+		{
+			m_CurrentOpts.set_value(OPTION_AUTOBOOT_SCRIPT, script, OPTION_PRIORITY_CMDLINE);
+			winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_LUASCRIPT), option);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+static bool ResetLUAScript(HWND hWnd)
+{
+	bool changed = false;
+	const char *new_value = "";
+
+	if (strcmp(new_value, m_CurrentOpts.value(OPTION_AUTOBOOT_SCRIPT)))
+	{
+		m_CurrentOpts.set_value(OPTION_AUTOBOOT_SCRIPT, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_LUASCRIPT), "无");
+		changed = true;
+	}
+
+	return changed;
+}
+
+static bool SelectPlugins(HWND hWnd)
+{
+	bool changed = false;
+	bool already_enabled = false;
+	int index = ComboBox_GetCurSel(GetDlgItem(hWnd, IDC_SELECT_PLUGIN));
+
+	if (index == CB_ERR)
+		return changed;
+
+	const char *value = m_CurrentOpts.value(OPTION_PLUGIN);
+	const char *new_value = (const char*)ComboBox_GetItemData(GetDlgItem(hWnd, IDC_SELECT_PLUGIN), index);
+	char *token = NULL;
+	char buffer[2048];
+	char plugins[256][32];
+	int num_plugins = 0;
+
+	strcpy(buffer, value);
+	token = strtok(buffer, ",");
+
+	if (token == NULL)
+	{
+		strcpy(plugins[num_plugins], buffer);
+		num_plugins = 1;
+	}
+	else
+	{
+		while (token != NULL)
+		{
+			strcpy(plugins[num_plugins], token);
+			num_plugins++;
+			token = strtok(NULL, ",");
+		}
+	}
+
+	if (strcmp(value, "") == 0)
+	{
+		m_CurrentOpts.set_value(OPTION_PLUGIN, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_PLUGIN), new_value);
+		changed = true;
+		(void)ComboBox_SetCurSel(GetDlgItem(hWnd, IDC_SELECT_PLUGIN), -1);
+		return changed;	
+	}
+	
+	for (int i = 0; i < num_plugins; i++)
+	{
+		if (strcmp(new_value, plugins[i]) == 0)
+		{
+			already_enabled = true;
+			break;
+		}
+	}
+
+	if (!already_enabled)
+	{
+		char new_option[256];
+		snprintf(new_option, std::size(new_option), "%s,%s", value, new_value);
+		m_CurrentOpts.set_value(OPTION_PLUGIN, new_option, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_PLUGIN), new_option);
+		changed = true;
+	}
+
+	(void)ComboBox_SetCurSel(GetDlgItem(hWnd, IDC_SELECT_PLUGIN), -1);
+	return changed;
+}
+
+static bool ResetPlugins(HWND hWnd)
+{
+	bool changed = false;
+	const char *new_value = "";
+
+	if (strcmp(new_value, m_CurrentOpts.value(OPTION_PLUGIN)))
+	{
+		m_CurrentOpts.set_value(OPTION_PLUGIN, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_PLUGIN), "无");
+		changed = true;
+	}
+
+	(void)ComboBox_SetCurSel(GetDlgItem(hWnd, IDC_SELECT_PLUGIN), -1);
+	return changed;
+}
+
+static bool SelectBGFXChains(HWND hWnd)
+{
+	char filename[MAX_PATH];
+	bool changed = false;
+
+	*filename = 0;
+
+	if (CommonFileDialog(GetOpenFileName, filename, FILETYPE_BGFX_FILES, false))
+	{
+		char option[MAX_PATH];
+		wchar_t *t_filename = win_wstring_from_utf8(filename);
+		wchar_t *tempname = PathFindFileName(t_filename);
+		PathRemoveExtension(tempname);
+		char *optname = win_utf8_from_wstring(tempname);
+		strcpy(option, optname);
+		free(t_filename);
+		free(optname);
+
+		if (strcmp(option, m_CurrentOpts.value(OSDOPTION_BGFX_SCREEN_CHAINS)))
+		{
+			m_CurrentOpts.set_value(OSDOPTION_BGFX_SCREEN_CHAINS, option, OPTION_PRIORITY_CMDLINE);
+			winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_BGFX_CHAINS), option);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+static bool ResetBGFXChains(HWND hWnd)
+{
+	bool changed = false;
+	const char *new_value = "default";
+
+	if (strcmp(new_value, m_CurrentOpts.value(OSDOPTION_BGFX_SCREEN_CHAINS)))
+	{
+		m_CurrentOpts.set_value(OSDOPTION_BGFX_SCREEN_CHAINS, new_value, OPTION_PRIORITY_CMDLINE);
+		winui_set_window_text_utf8(GetDlgItem(hWnd, IDC_BGFX_CHAINS), "Default");
+		changed = true;
+	}
+
+	return changed;
+}
+
+//mamefx: for coloring of changed elements
+static void DisableVisualStyles(HWND hDlg)
+{
+	/* Display */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_WINDOWED), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MAXIMIZE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_KEEPASPECT), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_THROTTLE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_FLIPY), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_FLIPX), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_VIDEO_MODE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_D3D_FILTER), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_WIDESTRETCH), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_UNEVENSTRETCH), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_UNEVENSTRETCHX), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_UNEVENSTRETCHY), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_AUTOSTRETCHXY), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_INTOVERSCAN), L" ", L" ");
+	/* Advanced */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_TRIPLE_BUFFER), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SYNCREFRESH), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_WAITVSYNC), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_REFRESHSPEED), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_HLSL_ON), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_AUTOFRAMESKIP), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_FRAMESKIP), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_EFFECT), L" ", L" ");
+	/* Screen */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_VIEW), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SIZES), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_REFRESH), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SWITCHRES), L" ", L" ");
+	/* OpenGL - BGFX */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_GLSLPOW), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_GLSLTEXTURE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_GLSLVBO), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_GLSLPBO), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_GLSL), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_GLSLFILTER), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_GLSLSYNC), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MAME_SHADER0), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MAME_SHADER1), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MAME_SHADER2), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MAME_SHADER3), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MAME_SHADER4), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SCREEN_SHADER0), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SCREEN_SHADER1), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SCREEN_SHADER2), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SCREEN_SHADER3), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SCREEN_SHADER4), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_BGFX_CHAINS), L" ", L" ");
+	/* Sound */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SOUND_MODE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SAMPLES), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SAMPLERATE), L" ", L" ");
+	/* Controllers */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_USE_MOUSE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_STEADYKEY), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_JOYSTICK), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_DEFAULT_INPUT), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_LIGHTGUN), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_DUAL_LIGHTGUN), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MULTIKEYBOARD), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MULTIMOUSE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_JOYSTICKMAP), L" ", L" ");
+	/* Controller Mapping */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_PADDLE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ADSTICK), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_PEDAL), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_MOUSE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_DIAL), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_TRACKBALL), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_LIGHTGUNDEVICE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_POSITIONAL), L" ", L" ");
+	/* Miscellaneous */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_CHEAT), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_DEBUG), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_LOGERROR), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SLEEP), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SKIP_GAME_INFO), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ENABLE_AUTOSAVE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_COINLOCKOUT), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_CONFIRM_QUIT), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ENABLE_MOUSE_UI), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_BIOS), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ARTWORK_CROP), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_CHEATFILE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_LANGUAGE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_LUASCRIPT), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_PLUGINS), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_PLUGIN), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_NVRAM_SAVE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_REWIND), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_DRC_CORE), L" ", L" ");
+	//缘来是你
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SKIP_CRC_CHECK), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_PGM2_MEMCARD_HACK), L" ", L" ");
+	
+	/* Snap/Movie/Playback */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SNAPVIEW), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SNAPNAME), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SNAPBILINEAR), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SNAPBURNIN), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_EXIT_PLAYBACK), L" ", L" ");
+	/* Not Working for now, disabled for future FIX!! */
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ROTATE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SCREEN), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ASPECT), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ASPECTRATION), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_ASPECTRATIOD), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SCREENSELECT), L" ", L" ");	
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SNAPSIZE), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SNAPSIZEWIDTH), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_SNAPSIZEHEIGHT), L" ", L" ");
+}
