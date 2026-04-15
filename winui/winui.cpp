@@ -6408,7 +6408,6 @@ static void LoadGameListFromFile(int games)
 		return;
 	}
 
-
 	TSV_GetPath(tsvname);	
 
 	FILE *f = fopen(tsvname, "r");
@@ -6431,7 +6430,7 @@ static void LoadGameListFromFile(int games)
 				line = NULL;
 			}
 
-// 修复列表
+			// 修复列表
 			if (j < NUM_COLUMNS) continue;
 			int gameIndex = GetGameNameIndex(p[0]);
 			if (gameIndex < 0 || gameIndex >= games) continue;	
@@ -6445,11 +6444,25 @@ static void LoadGameListFromFile(int games)
 				tsv_data = (TSV *)realloc(tsv_data, (i + 12) * sizeof(TSV));
 				//games += 12;
 			}
-		}					
+		}
+//中文列表优化
+#if 0
+		tsv_data[i].gamename = NULL;
+		tsv_data[i].description = NULL;
+		tsv_data[i].manufacturer = NULL;
+#endif
+	
 	}
     else
     {
 		need_update = 1;
+		
+//中文列表优化
+#if 0
+		tsv_data[0].gamename = NULL;
+		tsv_data[0].description = NULL;
+		tsv_data[0].manufacturer = NULL;
+#endif		
     }
 
 	//winui_message_box_utf8(hMain, "mame32k list load complete", MAMEUINAME, MB_ICONINFORMATION | MB_OK);
