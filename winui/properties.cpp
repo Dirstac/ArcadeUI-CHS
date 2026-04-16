@@ -221,7 +221,7 @@ static struct PropSheets
 	{ IDD_PROP_MISC2,		GameOptionsDialogProc },
 	{ IDD_PROP_SNAP,		GameOptionsDialogProc },
 	//缘来是你
-	{ IDD_PROP_IPS,			GameOptionsDialogProc }	// IPS
+	//{ IDD_PROP_IPS,			GameOptionsDialogProc }	// IPS
 };
 
 typedef struct
@@ -564,7 +564,7 @@ static intptr_t CALLBACK IPSDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
 			g_nGame = (int)lParam;
 			
 			char title[256];
-			snprintf(title, sizeof(title), "%s - IPS 管理器", GetDriverGameTitle(g_nGame));
+			snprintf(title, sizeof(title), "%s - IPS 管理器", GetDescriptionByIndex(g_nGame, GetUsechineseList()));
 			wchar_t *wtitle = win_wstring_from_utf8(title);
 			if (wtitle)
 			{
@@ -1980,7 +1980,8 @@ intptr_t CALLBACK GamePropertiesDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, 
 	{
 		case WM_INITDIALOG:
 		{
-			char tmp[64];
+			//char tmp[64];
+			char tmp[256];
 			int index = lParam;
 			CenterWindow(hDlg);
 			hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_MAMEUI_ICON));
