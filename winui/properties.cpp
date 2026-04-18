@@ -3801,13 +3801,9 @@ static void InitializeGlobalIPSTree(HWND hDlg)
     
     ScanAllGlobalPatches();
     int total = GetGlobalPatchCount();
-    if (total == 0)
-    {
-        return;
-    }
+    if (total == 0) return;
     
     std::map<std::string, HTREEITEM> game_nodes;
-    std::map<std::string, std::map<std::string, HTREEITEM>> category_nodes;
     
     for (int i = 0; i < total; i++)
     {
@@ -3872,41 +3868,12 @@ static void InitializeGlobalIPSTree(HWND hDlg)
             hGameNode = game_it->second;
         }
         
-        HTREEITEM hCatNode = hGameNode;
-        if (info->category && info->category[0] != 0)
-        {
-            auto& cat_map = category_nodes[info->game_name];
-            auto cat_it = cat_map.find(info->category);
-            if (cat_it == cat_map.end())
-            {
-                wchar_t* w_category = win_wstring_from_utf8(info->category);
-                if (w_category)
-                {
-                    TVINSERTSTRUCT tvis;
-                    memset(&tvis, 0, sizeof(tvis));
-                    tvis.hParent = hGameNode;
-                    tvis.hInsertAfter = TVI_LAST;
-                    tvis.item.mask = TVIF_TEXT | TVIF_PARAM;
-                    tvis.item.pszText = w_category;
-                    tvis.item.lParam = (LPARAM)-2;
-                    
-                    hCatNode = TreeView_InsertItem(hTree, &tvis);
-                    cat_map[info->category] = hCatNode;
-                    free(w_category);
-                }
-            }
-            else
-            {
-                hCatNode = cat_it->second;
-            }
-        }
-        
         wchar_t* w_title = win_wstring_from_utf8(info->patch_title);
         if (w_title)
         {
             TVINSERTSTRUCT tvis;
             memset(&tvis, 0, sizeof(tvis));
-            tvis.hParent = hCatNode;
+            tvis.hParent = hGameNode;
             tvis.hInsertAfter = TVI_LAST;
             tvis.item.mask = TVIF_TEXT | TVIF_PARAM;
             tvis.item.pszText = w_title;
