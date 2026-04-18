@@ -50,6 +50,44 @@ static void EnableNonClientDpiScalingSafe(HWND hWnd)
         fnEnableNonClientDpiScaling(hWnd);
     }
 }
+
+// EKMAME
+static DWORD GetShellLargeIconSize(void)
+{
+    DWORD dwSize = 32;
+    HKEY hKey;
+    
+    if (RegOpenKeyEx(HKEY_CURRENT_USER, 
+        TEXT("Control Panel\\Desktop\\WindowMetrics"), 
+        0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        TCHAR szBuffer[16];
+        DWORD dwType = REG_SZ;
+        DWORD dwLength = sizeof(szBuffer);
+        
+        if (RegQueryValueEx(hKey, TEXT("Shell Icon Size"), NULL, 
+            &dwType, (LPBYTE)szBuffer, &dwLength) == ERROR_SUCCESS)
+        {
+            dwSize = _ttoi(szBuffer);
+            if (dwSize < 16) dwSize = 16;
+            if (dwSize > 64) dwSize = 64;
+        }
+        RegCloseKey(hKey);
+    }
+    return dwSize;
+}
+
+// EKMAME
+static DWORD GetShellSmallIconSize(void)
+{
+    DWORD dwLargeSize = GetShellLargeIconSize();
+    if (dwLargeSize >= 48)
+        return 32;
+    else if (dwLargeSize >= 32)
+        return 24;
+    else
+        return 16;
+}
 //======================================================================================>>>
 static int MIN_WIDTH  = DBU_MIN_WIDTH;
 static int MIN_HEIGHT = DBU_MIN_HEIGHT;
@@ -4509,19 +4547,24 @@ static void CreateIcons(void)
 {
 	int icon_count = 0;
 	int grow = 1000;
-
+	
+// ========== EKMAME ==========>>>
+    DWORD dwSmallIconSize = GetShellSmallIconSize();
+    DWORD dwLargeIconSize = GetShellLargeIconSize();
+// =============================>>>
+	
 	while(g_iconData[icon_count].icon_name)
 		icon_count++;
-
-	hSmall = ImageList_Create(16, 16, ILC_COLORDDB | ILC_MASK, icon_count, icon_count + grow);
+	//EKMAME
+    hSmall = ImageList_Create(dwSmallIconSize, dwSmallIconSize, ILC_COLORDDB | ILC_MASK, icon_count, icon_count + grow);
 
 	if (hSmall == NULL) 
 	{
 		ErrorMessageBox("无法分配小图标图像列表！");
 		PostQuitMessage(0);
 	}
-
-	hLarge = ImageList_Create(32, 32, ILC_COLORDDB | ILC_MASK, icon_count, icon_count + grow);
+	//EKMAME
+	hLarge = ImageList_Create(dwLargeIconSize, dwLargeIconSize, ILC_COLORDDB | ILC_MASK, icon_count, icon_count + grow);
 
 	if (hLarge == NULL) 
 	{
