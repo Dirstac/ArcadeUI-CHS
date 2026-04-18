@@ -41,11 +41,11 @@ HANDLE winui_find_first_file_utf8(const char* filename, WIN32_FIND_DATA *findfil
 bool winui_move_file_utf8(const char* existingfilename, const char* newfilename);
 void CenterWindow(HWND hWnd);
 bool IsWindowsSevenOrHigher(void);
-// 缘来是你
+//======================= 缘来是你 =======================>>>
 //const char * GetDriverCloneName(int nIndex);
 int GetDriverIsClone(int nIndex);
 
-/*************** eziochiu 添加 IPS *****************/
+// eziochiu 添加 IPS
 int   GetPatchCount(int nGame, int nParentIndex);
 char* GetPatchFilename(int nGame, int nParentIndex, int nPatchIndex);
 char* GetPatchDesc(int nGame, int nParentIndex, int nPatchIndex);
@@ -54,11 +54,30 @@ char* GetPatchCategory(int nGame, int nParentIndex, int nPatchIndex);
 char* GetPatchImagePath(int nGame, int nParentIndex, int nPatchIndex);
 
 void SetIPSLangOverride(int langIndex);
+int GetIPSLangOverride(void);
+void SetIPSLangSaved(int lang);
+int GetIPSLangSaved(void);
 
+// 依赖/冲突
 void IPSLoadRelations(int nGame, int nParentIndex);
 void IPSSetPatchState(const char* patch_name, bool checked);
 bool IPSGetPatchState(const char* patch_name);
 void IPSGetAllPatchStates(int nGame, int nParentIndex, bool* states, int max_count);
-/**************************************************/
 
+typedef struct {
+    char* game_name;
+    char* game_desc;
+    char* category;
+    char* patch_filename;
+    char* patch_title;
+    char* patch_desc;
+    char* image_path;
+} GlobalPatchInfo;
+
+void ScanAllGlobalPatches(void);
+int GetGlobalPatchCount(void);
+const GlobalPatchInfo* GetGlobalPatchInfo(int index);
+void FreeGlobalPatches(void);
+void ForceRescanGlobalPatches(void);
+//============================================================>>>
 #endif

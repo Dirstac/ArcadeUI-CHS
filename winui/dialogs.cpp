@@ -3,7 +3,7 @@
 
 #include "winui.h"
 
-//========= DIP=============>>>
+//========= DPI=============>>>
 float g_fDpiScale = 1.0f;
 UINT g_uCurrentDpi = 96;
 //==========================>>>
