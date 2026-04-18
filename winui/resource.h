@@ -483,6 +483,7 @@
 #define IDC_SKIP_CRC_CHECK              1408
 #define IDC_PGM2_MEMCARD_HACK           1409
 #define IDC_FAST_ROM_AUDIT              1410
+#define IDC_60FPS                      	1411
 //============= 缘来是你 ==========>>>
 #define ID_CONTEXT_SHOW_FOLDER_START    39000
 #define ID_CONTEXT_SHOW_FOLDER_END      39499

@@ -3309,6 +3309,8 @@ static void BuildDataMap(void)
 	datamap_add(properties_datamap, IDC_INTSCALEX_TXT,			DM_INT,		OPTION_INTSCALEX);
 	datamap_add(properties_datamap, IDC_INTSCALEY,				DM_INT,		OPTION_INTSCALEY);
 	datamap_add(properties_datamap, IDC_INTSCALEY_TXT,			DM_INT,		OPTION_INTSCALEY);
+	//缘来是你
+	datamap_add(properties_datamap, IDC_60FPS,					DM_BOOL,	OPTION_60FPS);	//EKMAME 60fps
 	// core opengl - bgfx options
 	datamap_add(properties_datamap, IDC_GLSLPOW,				DM_BOOL,	OSDOPTION_GL_FORCEPOW2TEXTURE);
 	datamap_add(properties_datamap, IDC_GLSLTEXTURE,			DM_BOOL,	OSDOPTION_GL_NOTEXTURERECT);
@@ -4821,6 +4823,7 @@ static void DisableVisualStyles(HWND hDlg)
 //==================== 缘来是你 ========================>>>
 	SetWindowTheme(GetDlgItem(hDlg, IDC_SKIP_CRC_CHECK), L" ", L" ");
 	SetWindowTheme(GetDlgItem(hDlg, IDC_PGM2_MEMCARD_HACK), L" ", L" ");
+	SetWindowTheme(GetDlgItem(hDlg, IDC_60FPS), L" ", L" ");
 //======================================================>>>
 	
 	/* Snap/Movie/Playback */
