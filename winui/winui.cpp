@@ -7,7 +7,9 @@
 
 //=================================== 缘来是你 ========================================>>>
 #include <shellapi.h>
-#include <vector>	//导出XML
+//导出XML
+#include <vector>
+#include <string>
 
 #define USE_SPLASH_SCREEN 1  // 关闭启动画面
 
@@ -6756,11 +6758,19 @@ static void ExportGameROMsToXML(FILE* f, int game_index)
                 
                 if (!rom_name || rom_size == 0) continue;
                 
-                uint32_t crc_val = 0;
-                util::hash_collection(rom->hashdata()).crc(crc_val);
+                util::hash_collection hashes(rom->hashdata());
+                std::string attr_str = hashes.attribute_string();
                 
-                fprintf(f, "\t\t<rom name=\"%s\" size=\"%d\" crc=\"%08x\"/>\n", 
-                        EscapeXML(rom_name).c_str(), rom_size, crc_val);
+                if (attr_str.empty())
+                {
+                    fprintf(f, "\t\t<rom name=\"%s\" size=\"%u\"/>\n", 
+                            EscapeXML(rom_name).c_str(), rom_size);
+                }
+                else
+                {
+                    fprintf(f, "\t\t<rom name=\"%s\" size=\"%u\" %s/>\n", 
+                            EscapeXML(rom_name).c_str(), rom_size, attr_str.c_str());
+                }
             }
         }
     }
@@ -6774,7 +6784,8 @@ static void ExportGameToXML(FILE* f, int game_index)
     if (parent >= 0)
     {
         fprintf(f, "\t<machine name=\"%s\" cloneof=\"%s\">\n", 
-                drv->name, driver_list::driver(parent).name);
+                drv->name, 
+                driver_list::driver(parent).name);
     }
     else
     {
@@ -6783,6 +6794,13 @@ static void ExportGameToXML(FILE* f, int game_index)
     
     fprintf(f, "\t\t<description>%s</description>\n", 
             EscapeXML(drv->type.fullname()).c_str());
+
+#if 0    // 导出年份和生产厂商
+    fprintf(f, "\t\t<year>%s</year>\n", 
+            EscapeXML(drv->type.year()).c_str());
+    fprintf(f, "\t\t<manufacturer>%s</manufacturer>\n", 
+            EscapeXML(drv->type.manufacturer()).c_str());
+#endif
     
     if (DriverUsesRoms(game_index))
     {
@@ -6848,9 +6866,6 @@ static void ExportFullXML(int mode, HWND hWndList)
         total = driver_list::total();
         for (int i = 0; i < total; i++)
         {
-            if (driver_list::driver(i).flags & MACHINE_IS_BIOS_ROOT)
-                continue;
-            
             bool include = false;
             switch (mode)
             {
@@ -6858,10 +6873,10 @@ static void ExportFullXML(int mode, HWND hWndList)
                     include = true;
                     break;
                 case 1:
-                    include = (!DriverUsesRoms(i) || IsAuditResultYes(GetRomAuditResults(i)));
+                    include = DriverUsesRoms(i) && IsAuditResultYes(GetRomAuditResults(i));
                     break;
                 case 2:
-                    include = (DriverUsesRoms(i) && !IsAuditResultYes(GetRomAuditResults(i)));
+                    include = DriverUsesRoms(i) && !IsAuditResultYes(GetRomAuditResults(i));
                     break;
             }
             if (include)
