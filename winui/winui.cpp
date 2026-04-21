@@ -3494,13 +3494,19 @@ static bool MameCommand(HWND hWnd, int id, HWND hWndCtl, UINT codeNotify)
 						found = TRUE;
 						break;
 					}
+					snprintf(rompath, sizeof(rompath), "%s\\%s.7z", dir, romname);
+					if (GetFileAttributesA(rompath) != INVALID_FILE_ATTRIBUTES)
+					{
+						found = TRUE;
+						break;
+					}
 				}
 				dir = strtok(NULL, ";");
 			}
 		
 			if (!found)
 			{
-				ErrorMessageBox("找不到 ROM 文件:\n%s.zip", romname);
+				ErrorMessageBox("找不到 ROM 文件:\n%s.zip 或 %s.7z", romname, romname);
 				break;
 			}
 		
@@ -3603,6 +3609,14 @@ static bool MameCommand(HWND hWnd, int id, HWND hWndCtl, UINT codeNotify)
 					if (strlen(dir) > 0)
 					{
 						snprintf(roms[nValidCount].path, MAX_PATH, "%s\\%s.zip", dir, romname);
+						if (GetFileAttributesA(roms[nValidCount].path) != INVALID_FILE_ATTRIBUTES)
+						{
+							roms[nValidCount].gameIndex = nGame;
+							nValidCount++;
+							found = TRUE;
+							break;
+						}
+						snprintf(roms[nValidCount].path, MAX_PATH, "%s\\%s.7z", dir, romname);
 						if (GetFileAttributesA(roms[nValidCount].path) != INVALID_FILE_ATTRIBUTES)
 						{
 							roms[nValidCount].gameIndex = nGame;
