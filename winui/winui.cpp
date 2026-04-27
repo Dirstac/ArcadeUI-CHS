@@ -6378,9 +6378,8 @@ static void SaveGameListToFile(char *szFile)
 		{
 			int nGameIndex  = lvi.lParam;
 
+//======================= 缘来是你：导出当前游戏列表 ==============>>>			
 			//fprintf(f, "%s%s", GetDriverGameTitle(nGameIndex),"\n");	//原代码
-//缘来是你
-//======================= 导出当前游戏列表 ===================>>>			
 			const char *shortname = GetDriverGameName(nGameIndex);
             const char *description = GetDescriptionByIndex(nGameIndex, GetUsechineseList());
             const char *manufacturer = GetGameManufactureByIndex(nGameIndex, GetUsechineseList());
@@ -6504,24 +6503,19 @@ static void LoadGameListFromFile(int games)
 				//games += 12;
 			}
 		}
-//中文列表优化
-#if 0
+		//优化中文列表
 		tsv_data[i].gamename = NULL;
 		tsv_data[i].description = NULL;
 		tsv_data[i].manufacturer = NULL;
-#endif
-	
 	}
     else
     {
 		need_update = 1;
 		
-//中文列表优化
-#if 0
+		//优化中文列表
 		tsv_data[0].gamename = NULL;
 		tsv_data[0].description = NULL;
 		tsv_data[0].manufacturer = NULL;
-#endif		
     }
 
 	//winui_message_box_utf8(hMain, "mame32k list load complete", MAMEUINAME, MB_ICONINFORMATION | MB_OK);
